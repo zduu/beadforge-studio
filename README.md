@@ -133,3 +133,45 @@ Cloudflare Pages 设置：
 - Build command: `npm run build`
 - Build output directory: `dist`
 - Node.js version: `24` 或 Cloudflare 当前支持的最新 LTS
+
+Cloudflare Pages 不需要设置 `VITE_BASE_PATH`。默认构建会继续生成适合根路径部署的资源引用。
+
+## GitHub Pages 部署
+
+项目已提供 GitHub Actions workflow：
+
+```text
+.github/workflows/github-pages.yml
+```
+
+该 workflow 会在推送到 `main` 分支时自动构建并部署，也支持在 GitHub Actions 页面手动运行。构建时会设置：
+
+```text
+VITE_BASE_PATH=/beadforge-studio/
+```
+
+因此生成的资源路径适配 GitHub Pages 项目页：
+
+```text
+https://zduu.github.io/beadforge-studio/
+```
+
+启用步骤：
+
+1. 进入 GitHub 仓库的 `Settings` -> `Pages`。
+2. 将 `Build and deployment` 的 `Source` 设置为 `GitHub Actions`。
+3. 推送到 `main` 分支，或在 `Actions` 页面手动运行 `Deploy GitHub Pages` workflow。
+
+如果仓库名从 `beadforge-studio` 改成其他名字，需要同步修改 `.github/workflows/github-pages.yml` 里的 `VITE_BASE_PATH`，格式为：
+
+```text
+VITE_BASE_PATH=/<仓库名>/
+```
+
+如果以后改成 GitHub 用户/组织主页仓库，或绑定自定义域名并部署在域名根路径，可以把 `VITE_BASE_PATH` 改成 `/`。
+
+本地验证 GitHub Pages 构建：
+
+```bash
+VITE_BASE_PATH=/beadforge-studio/ npm run build
+```
