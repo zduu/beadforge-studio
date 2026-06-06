@@ -1,0 +1,5 @@
+name = "bead-pattern-studio"
+pages_build_output_dir = "dist"
+
+[vars]
+APP_TARGET = "cloudflare-pages"

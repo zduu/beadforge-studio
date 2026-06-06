@@ -1,0 +1,26 @@
+import type { BeadColor } from "../types";
+
+export const bambuPlaBasicColors: BeadColor[] = [
+  { id: "bambu-pla-basic-jade-white", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10100", name: "Jade White", nameZh: "玉白", hex: "#F4F4F0", materialId: "GFA00" },
+  { id: "bambu-pla-basic-black", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10101", name: "Black", nameZh: "黑色", hex: "#0A0A0A", materialId: "GFA00" },
+  { id: "bambu-pla-basic-silver", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10102", name: "Silver", nameZh: "银色", hex: "#A8A8A8", materialId: "GFA00" },
+  { id: "bambu-pla-basic-gray", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10103", name: "Gray", nameZh: "灰色", hex: "#8C8D8F", materialId: "GFA00" },
+  { id: "bambu-pla-basic-dark-gray", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10104", name: "Dark Gray", nameZh: "深灰", hex: "#3F4145", materialId: "GFA00" },
+  { id: "bambu-pla-basic-red", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10105", name: "Red", nameZh: "红色", hex: "#D32941", materialId: "GFA00" },
+  { id: "bambu-pla-basic-orange", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10106", name: "Orange", nameZh: "橙色", hex: "#F0672A", materialId: "GFA00" },
+  { id: "bambu-pla-basic-yellow", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10107", name: "Yellow", nameZh: "黄色", hex: "#F6C915", materialId: "GFA00" },
+  { id: "bambu-pla-basic-bambu-green", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10108", name: "Bambu Green", nameZh: "拓竹绿", hex: "#00AE42", materialId: "GFA00" },
+  { id: "bambu-pla-basic-green", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10109", name: "Green", nameZh: "绿色", hex: "#1F7A3A", materialId: "GFA00" },
+  { id: "bambu-pla-basic-blue", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10110", name: "Blue", nameZh: "蓝色", hex: "#1D4FA3", materialId: "GFA00" },
+  { id: "bambu-pla-basic-cyan", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10111", name: "Cyan", nameZh: "青色", hex: "#00A7C8", materialId: "GFA00" },
+  { id: "bambu-pla-basic-purple", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10112", name: "Purple", nameZh: "紫色", hex: "#6F3FA0", materialId: "GFA00" },
+  { id: "bambu-pla-basic-magenta", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10113", name: "Magenta", nameZh: "品红", hex: "#C13C85", materialId: "GFA00" },
+  { id: "bambu-pla-basic-pink", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10114", name: "Pink", nameZh: "粉色", hex: "#F2A4C8", materialId: "GFA00" },
+  { id: "bambu-pla-basic-brown", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10115", name: "Brown", nameZh: "棕色", hex: "#7A4A2E", materialId: "GFA00" },
+  { id: "bambu-pla-basic-beige", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10116", name: "Beige", nameZh: "米色", hex: "#D8C1A0", materialId: "GFA00" },
+  { id: "bambu-pla-basic-gold", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10117", name: "Gold", nameZh: "金色", hex: "#C89C3C", materialId: "GFA00" },
+  { id: "bambu-pla-basic-sakura-pink", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10118", name: "Sakura Pink", nameZh: "樱花粉", hex: "#F6C2CE", materialId: "GFA00" },
+  { id: "bambu-pla-basic-mistletoe-green", brand: "Bambu Lab", filamentType: "PLA Basic", code: "10119", name: "Mistletoe Green", nameZh: "槲寄生绿", hex: "#3E6B4A", materialId: "GFA00" },
+];
+
+export const colorById = new Map(bambuPlaBasicColors.map((color) => [color.id, color]));
