@@ -1,5 +1,4 @@
 import { type PointerEvent, useEffect, useRef } from "react";
-import { colorById } from "../data/bambuPlaBasic";
 import { isPatternBackgroundCell } from "../lib/pattern";
 import type { CropRect, Pattern } from "../types";
 
@@ -180,10 +179,11 @@ function drawContent(
   const cellSize = Math.min(metrics.width / pattern.width, metrics.height / pattern.height);
   const left = metrics.left + (metrics.width - cellSize * pattern.width) / 2;
   const top = metrics.top + (metrics.height - cellSize * pattern.height) / 2;
+  const colorByPatternId = new Map(pattern.palette.map((item) => [item.id, item]));
   for (let y = 0; y < pattern.height; y += 1) {
     for (let x = 0; x < pattern.width; x += 1) {
       const index = y * pattern.width + x;
-      const color = pattern.cells[index] ? colorById.get(pattern.cells[index] ?? "") : null;
+      const color = pattern.cells[index] ? colorByPatternId.get(pattern.cells[index] ?? "") : null;
       context.fillStyle = color && !isPatternBackgroundCell(pattern, index) ? color.hex : "#ffffff";
       context.fillRect(left + x * cellSize, top + y * cellSize, cellSize, cellSize);
     }

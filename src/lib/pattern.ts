@@ -1,4 +1,3 @@
-import { colorById } from "../data/bambuPlaBasic";
 import type { BeadColor, ColorUsage, CropRect, Pattern } from "../types";
 
 export function getColorUsage(pattern: Pattern): ColorUsage[] {
@@ -11,7 +10,7 @@ export function getColorUsage(pattern: Pattern): ColorUsage[] {
   }
 
   return [...counts.entries()]
-    .map(([id, count]) => ({ color: colorById.get(id), count }))
+    .map(([id, count]) => ({ color: pattern.palette.find((color) => color.id === id), count }))
     .filter((item): item is { color: BeadColor; count: number } => Boolean(item.color))
     .sort((a, b) => b.count - a.count || a.color.name.localeCompare(b.color.name));
 }
@@ -25,7 +24,7 @@ export function getAllPatternColors(pattern: Pattern): ColorUsage[] {
   }
 
   return [...counts.entries()]
-    .map(([id, count]) => ({ color: colorById.get(id), count }))
+    .map(([id, count]) => ({ color: pattern.palette.find((color) => color.id === id), count }))
     .filter((item): item is { color: BeadColor; count: number } => Boolean(item.color))
     .sort((a, b) => b.count - a.count || a.color.name.localeCompare(b.color.name));
 }

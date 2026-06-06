@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { colorById } from "../data/bambuPlaBasic";
 import type { LayeredPattern } from "../types";
 
 type LayeredModelPreviewProps = {
@@ -91,8 +90,11 @@ function buildLayerGroup(layeredPattern: LayeredPattern, activeLayerIndex: numbe
   const group = new THREE.Group();
   const widthOffset = (layeredPattern.width - 1) / 2;
   const heightOffset = (layeredPattern.height - 1) / 2;
-  const blockHeight = 0.34;
-  const layerStep = 0.42;
+  const beadPitchMm = layeredPattern.sourceModel?.beadPitchMm ?? 2.6;
+  const beadHeightMm = layeredPattern.sourceModel?.beadHeightMm ?? 3;
+  const layerStep = Math.max(0.08, beadHeightMm / beadPitchMm);
+  const blockHeight = Math.max(0.08, layerStep * 0.86);
+  const colorById = new Map(layeredPattern.palette.map((color) => [color.id, color]));
   const blocksByColor = new Map<string, Array<{ x: number; y: number; z: number; layer: number }>>();
   let totalBlocks = 0;
 
@@ -158,7 +160,7 @@ function buildLayerGroup(layeredPattern: LayeredPattern, activeLayerIndex: numbe
   }
 
   const grid = new THREE.GridHelper(Math.max(layeredPattern.width, layeredPattern.height), Math.max(layeredPattern.width, layeredPattern.height), 0x94a3b8, 0xd0d5dd);
-  grid.position.y = -0.24;
+  grid.position.y = -blockHeight / 2 - 0.04;
   group.add(grid);
 
   return group;

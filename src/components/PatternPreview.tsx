@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { colorById } from "../data/bambuPlaBasic";
 import { isPatternBackgroundCell } from "../lib/pattern";
 import type { Pattern } from "../types";
 
@@ -51,6 +50,7 @@ export function PatternPreview({ pattern, selectedColorId, zoom, onCellClick }: 
         return;
       }
 
+      const colorById = new Map(pattern.palette.map((color) => [color.id, color]));
       const cellSize = cssSize / Math.max(pattern.width, pattern.height);
       const offsetX = (cssSize - pattern.width * cellSize) / 2;
       const offsetY = (cssSize - pattern.height * cellSize) / 2;

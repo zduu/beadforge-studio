@@ -12,7 +12,7 @@ export type CropRect = {
 export type BeadColor = {
   id: string;
   brand: "Bambu Lab";
-  filamentType: "PLA Basic";
+  filamentType: "PLA Basic" | "3MF Filament";
   code: string;
   name: string;
   nameZh: string;
@@ -60,6 +60,7 @@ export type LayeredPattern = {
     layerHeightMm: number;
     beadPitchMm: number;
     beadHeightMm: number;
+    targetLayers?: number;
   };
   layers: Array<{
     index: number;

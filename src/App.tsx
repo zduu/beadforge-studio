@@ -11,6 +11,7 @@ import {
   Eraser,
   Brush,
   RotateCcw,
+  RotateCw,
   Undo2,
   Upload,
   ZoomIn,
@@ -29,7 +30,7 @@ import {
 import { imageFileToPattern } from "./lib/imageToPattern";
 import { layeredPatternToPattern } from "./lib/layeredPattern";
 import { cropPatternToRect, getAllPatternColors, getColorUsage, isPatternBackgroundCell, replacePatternColor, setPatternBackground, setPatternCell, validatePattern } from "./lib/pattern";
-import type { CropRect, FitMode, LayeredPattern, Pattern, PatternSettings, SampleMode } from "./types";
+import type { ColorUsage, CropRect, FitMode, LayeredPattern, Pattern, PatternSettings, SampleMode } from "./types";
 
 const DEFAULT_SETTINGS: PatternSettings = {
   width: 32,
@@ -40,6 +41,12 @@ const DEFAULT_SETTINGS: PatternSettings = {
   detailBoost: 55,
   sourceCrop: null,
   mirrorX: false,
+};
+
+const DEFAULT_MODEL_SLICE_SETTINGS = {
+  beadPitchMm: 2.6,
+  beadHeightMm: 3,
+  targetLayers: 0,
 };
 
 const SIZE_PRESETS = [32, 48, 64, 80];
@@ -89,6 +96,13 @@ function App() {
   const [backgroundColorId, setBackgroundColorId] = useState<string | null>(DEFAULT_BACKGROUND_COLOR_ID);
   const [inspectInfo, setInspectInfo] = useState<InspectInfo | null>(null);
   const [modelColorId, setModelColorId] = useState<string>(bambuPlaBasicColors[1].id);
+  const [modelSliceSettings, setModelSliceSettings] = useState(DEFAULT_MODEL_SLICE_SETTINGS);
+  const [modelSliceDrafts, setModelSliceDrafts] = useState({
+    beadPitchMm: String(DEFAULT_MODEL_SLICE_SETTINGS.beadPitchMm),
+    beadHeightMm: String(DEFAULT_MODEL_SLICE_SETTINGS.beadHeightMm),
+    targetLayers: "",
+  });
+  const [modelSourceFile, setModelSourceFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isModelProcessing, setIsModelProcessing] = useState(false);
   const [status, setStatus] = useState("等待图片");
@@ -96,7 +110,12 @@ function App() {
   const projectInputRef = useRef<HTMLInputElement | null>(null);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
 
-  const usage = useMemo(() => (pattern ? getColorUsage(pattern) : []), [pattern]);
+  const usage = useMemo(() => {
+    if (layeredPattern && previewMode === "model") {
+      return getLayeredColorUsage(layeredPattern);
+    }
+    return pattern ? getColorUsage(pattern) : [];
+  }, [layeredPattern, pattern, previewMode]);
   const allPatternColors = useMemo(() => (pattern ? getAllPatternColors(pattern) : []), [pattern]);
   const totalBeads = useMemo(() => usage.reduce((sum, item) => sum + item.count, 0), [usage]);
 
@@ -111,6 +130,14 @@ function App() {
   useEffect(() => {
     setPreviewZoomDraft(String(Math.round(previewZoom * 100)));
   }, [previewZoom]);
+
+  useEffect(() => {
+    setModelSliceDrafts({
+      beadPitchMm: formatModelNumber(modelSliceSettings.beadPitchMm),
+      beadHeightMm: formatModelNumber(modelSliceSettings.beadHeightMm),
+      targetLayers: modelSliceSettings.targetLayers > 0 ? String(modelSliceSettings.targetLayers) : "",
+    });
+  }, [modelSliceSettings.beadPitchMm, modelSliceSettings.beadHeightMm, modelSliceSettings.targetLayers]);
 
   useEffect(() => {
     if (!sourceFile) {
@@ -179,6 +206,10 @@ function App() {
       return;
     }
     setPreviewZoom(clampNumber(parsed, 10, 800) / 100);
+  };
+
+  const commitModelSliceDrafts = () => {
+    setModelSliceSettings(getModelSliceSettingsFromDrafts(modelSliceDrafts));
   };
 
   const handleImageChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -323,7 +354,7 @@ function App() {
     if (x < 0 || y < 0 || x >= pattern.width || y >= pattern.height) return;
 
     const cell = pattern.cells[y * pattern.width + x];
-    const color = cell ? bambuPlaBasicColors.find((item) => item.id === cell) : null;
+    const color = cell ? pattern.palette.find((item) => item.id === cell) : null;
 
     if (editTool === "inspect") {
       const isBackground = isPatternBackgroundCell(pattern, y * pattern.width + x);
@@ -349,27 +380,28 @@ function App() {
     setStatus(`已修改 ${x + 1}, ${y + 1}`);
   };
 
-  const handleModelChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
+  const sliceModelFile = async (file: File) => {
     setIsModelProcessing(true);
     setStatus("正在切片模型");
     try {
       const { modelFileToLayeredPattern } = await import("./lib/modelToLayered");
+      const normalizedModelSliceSettings = getModelSliceSettingsFromDrafts(modelSliceDrafts);
+      setModelSliceSettings(normalizedModelSliceSettings);
       const nextLayeredPattern = await modelFileToLayeredPattern(file, {
         width: settings.width,
         height: settings.height,
-        beadPitchMm: 2.6,
-        beadHeightMm: 3,
-        maxLayers: 80,
+        beadPitchMm: normalizedModelSliceSettings.beadPitchMm,
+        beadHeightMm: normalizedModelSliceSettings.beadHeightMm,
+        targetLayers: normalizedModelSliceSettings.targetLayers,
         colorId: modelColorId,
       });
       setLayeredPattern(nextLayeredPattern);
+      setModelSourceFile(file);
       setUndoStack([]);
       setActiveLayerIndex(0);
       setPreviewMode("model");
-      setPattern(applyPatternBackground(layeredPatternToPattern(nextLayeredPattern, 0), backgroundColorId));
+      setBackgroundColorId(null);
+      setPattern(applyPatternBackground(layeredPatternToPattern(nextLayeredPattern, 0), null));
       setSourceFile(null);
       setPreviewCropRect(null);
       setSelectedColorId(null);
@@ -378,6 +410,16 @@ function App() {
       setStatus(error instanceof Error ? error.message : "模型切片失败");
     } finally {
       setIsModelProcessing(false);
+    }
+  };
+
+  const handleModelChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      await sliceModelFile(file);
+    } finally {
       event.target.value = "";
     }
   };
@@ -390,6 +432,29 @@ function App() {
     setPreviewCropRect(null);
     setSelectedColorId(null);
     setStatus(`当前第 ${layerIndex + 1} / ${layeredPattern.layers.length} 层`);
+  };
+
+  const rotateCurrentView = () => {
+    if (!pattern) return;
+
+    if (layeredPattern && previewMode === "layer") {
+      const nextLayeredPattern = rotateLayeredPatternClockwise(layeredPattern);
+      setLayeredPattern(nextLayeredPattern);
+      setPattern(applyPatternBackground(layeredPatternToPattern(nextLayeredPattern, activeLayerIndex), backgroundColorId));
+      setUndoStack([]);
+      setPreviewCropRect(null);
+      setSelectedColorId(null);
+      setStatus("已旋转所有模型层");
+      return;
+    }
+
+    pushUndoSnapshot();
+    const nextPattern = rotatePatternClockwise(pattern);
+    setPattern(nextPattern);
+    setSettings(normalizeSettings(nextPattern.settings));
+    setPreviewCropRect(null);
+    setSelectedColorId(null);
+    setStatus("已旋转图纸");
   };
 
   return (
@@ -550,14 +615,44 @@ function App() {
 
           <details className="model-panel">
             <summary>3D 模型</summary>
-            <div className="metric-row">
-              <span>格距</span>
-              <strong>2.6 mm</strong>
-            </div>
-            <div className="metric-row">
-              <span>层高</span>
-              <strong>3 mm</strong>
-            </div>
+            <label className="field compact-field">
+              <span>层数</span>
+              <input
+                min={0}
+                placeholder="默认"
+                type="number"
+                value={modelSliceDrafts.targetLayers}
+                onBlur={commitModelSliceDrafts}
+                onChange={(event) => setModelSliceDrafts((drafts) => ({ ...drafts, targetLayers: event.target.value }))}
+                onKeyDown={handleDraftKeyDown}
+              />
+            </label>
+            <label className="field compact-field">
+              <span>格距 mm</span>
+              <input
+                inputMode="decimal"
+                min={0.1}
+                step={0.1}
+                type="number"
+                value={modelSliceDrafts.beadPitchMm}
+                onBlur={commitModelSliceDrafts}
+                onChange={(event) => setModelSliceDrafts((drafts) => ({ ...drafts, beadPitchMm: event.target.value }))}
+                onKeyDown={handleDraftKeyDown}
+              />
+            </label>
+            <label className="field compact-field">
+              <span>层高 mm</span>
+              <input
+                inputMode="decimal"
+                min={0.1}
+                step={0.1}
+                type="number"
+                value={modelSliceDrafts.beadHeightMm}
+                onBlur={commitModelSliceDrafts}
+                onChange={(event) => setModelSliceDrafts((drafts) => ({ ...drafts, beadHeightMm: event.target.value }))}
+                onKeyDown={handleDraftKeyDown}
+              />
+            </label>
             <label className="field compact-field">
               <span>默认耗材</span>
               <select value={modelColorId} onChange={(event) => setModelColorId(event.target.value)}>
@@ -569,6 +664,10 @@ function App() {
             <button className="button full" disabled={isModelProcessing} onClick={() => modelInputRef.current?.click()} type="button">
               <Layers size={18} />
               STL / 3MF 切片
+            </button>
+            <button className="button full" disabled={!modelSourceFile || isModelProcessing} onClick={() => modelSourceFile && void sliceModelFile(modelSourceFile)} type="button">
+              <RotateCw size={18} />
+              重新切片
             </button>
             {layeredPattern && (
               <div className="layer-list">
@@ -626,6 +725,11 @@ function App() {
                     整体
                   </button>
                 </div>
+              )}
+              {pattern && !(layeredPattern && previewMode === "model") && (
+                <button className="icon-button" onClick={rotateCurrentView} title="顺时针旋转" type="button">
+                  <RotateCw size={18} />
+                </button>
               )}
               <button className="icon-button" disabled={!pattern} onClick={() => pattern && downloadPatternPng(pattern)} title="导出 PNG" type="button">
                 <Download size={18} />
@@ -757,6 +861,39 @@ function normalizeSettings(settings: PatternSettings): PatternSettings {
   };
 }
 
+function normalizeModelSliceSettings(settings: typeof DEFAULT_MODEL_SLICE_SETTINGS): typeof DEFAULT_MODEL_SLICE_SETTINGS {
+  return {
+    beadPitchMm: clampDecimal(settings.beadPitchMm, 0.1, 100),
+    beadHeightMm: clampDecimal(settings.beadHeightMm, 0.1, 100),
+    targetLayers: clampNumber(settings.targetLayers, 0, 2000),
+  };
+}
+
+function getModelSliceSettingsFromDrafts(drafts: typeof DEFAULT_MODEL_SLICE_SETTINGS | Record<keyof typeof DEFAULT_MODEL_SLICE_SETTINGS, string>) {
+  return normalizeModelSliceSettings({
+    beadPitchMm: parseDraftFloat(String(drafts.beadPitchMm), DEFAULT_MODEL_SLICE_SETTINGS.beadPitchMm),
+    beadHeightMm: parseDraftFloat(String(drafts.beadHeightMm), DEFAULT_MODEL_SLICE_SETTINGS.beadHeightMm),
+    targetLayers: parseDraftNumber(String(drafts.targetLayers), DEFAULT_MODEL_SLICE_SETTINGS.targetLayers),
+  });
+}
+
+function getLayeredColorUsage(layeredPattern: LayeredPattern): ColorUsage[] {
+  const counts = new Map<string, number>();
+  const colorById = new Map(layeredPattern.palette.map((color) => [color.id, color]));
+
+  for (const layer of layeredPattern.layers) {
+    for (const cell of layer.cells) {
+      if (!cell) continue;
+      counts.set(cell, (counts.get(cell) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([id, count]) => ({ color: colorById.get(id), count }))
+    .filter((item): item is ColorUsage => Boolean(item.color))
+    .sort((a, b) => b.count - a.count || a.color.name.localeCompare(b.color.name));
+}
+
 function normalizeCropRect(rect: CropRect | null): CropRect | null {
   if (!rect) return null;
   const x = clampUnit(rect.x);
@@ -774,8 +911,22 @@ function parseDraftNumber(value: string, fallback: number): number {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+function parseDraftFloat(value: string, fallback: number): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function clampDecimal(value: number, min: number, max: number): number {
+  const clamped = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+  return Number(clamped.toFixed(3));
+}
+
+function formatModelNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
 }
 
 function clampUnit(value: number): number {
@@ -788,6 +939,49 @@ function applyPatternBackground(pattern: Pattern, colorId: string | null): Patte
     ...pattern,
     backgroundCells,
   }, colorId);
+}
+
+function rotatePatternClockwise(pattern: Pattern): Pattern {
+  const backgroundCells = pattern.backgroundCells?.length === pattern.cells.length ? pattern.backgroundCells : undefined;
+  return {
+    ...pattern,
+    width: pattern.height,
+    height: pattern.width,
+    cells: rotateCellsClockwise(pattern.cells, pattern.width, pattern.height),
+    backgroundCells: backgroundCells ? rotateCellsClockwise(backgroundCells, pattern.width, pattern.height) : undefined,
+    settings: normalizeSettings({
+      ...pattern.settings,
+      width: pattern.height,
+      height: pattern.width,
+    }),
+    source: pattern.source ? {
+      ...pattern.source,
+      width: pattern.source.height,
+      height: pattern.source.width,
+    } : undefined,
+  };
+}
+
+function rotateLayeredPatternClockwise(layeredPattern: LayeredPattern): LayeredPattern {
+  return {
+    ...layeredPattern,
+    width: layeredPattern.height,
+    height: layeredPattern.width,
+    layers: layeredPattern.layers.map((layer) => ({
+      ...layer,
+      cells: rotateCellsClockwise(layer.cells, layeredPattern.width, layeredPattern.height),
+    })),
+  };
+}
+
+function rotateCellsClockwise<T>(cells: T[], width: number, height: number): T[] {
+  const rotated = new Array<T>(cells.length);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      rotated[x * height + (height - 1 - y)] = cells[y * width + x];
+    }
+  }
+  return rotated;
 }
 
 function clonePattern(pattern: Pattern): Pattern {

@@ -1,4 +1,3 @@
-import { colorById } from "../data/bambuPlaBasic";
 import type { LayeredPattern, Pattern } from "../types";
 import { getColorUsage, isPatternBackgroundCell } from "./pattern";
 
@@ -18,6 +17,7 @@ export function renderPatternToCanvas(pattern: Pattern, cellSize = 24, showGrid 
   context.fillStyle = "#344054";
   context.textAlign = "center";
   context.textBaseline = "middle";
+  const colorById = new Map(pattern.palette.map((color) => [color.id, color]));
 
   for (let x = 0; x < pattern.width; x += 1) {
     context.fillText(String(x + 1), margin + x * cellSize + cellSize / 2, 16);
