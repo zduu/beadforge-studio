@@ -5,3 +5,4 @@ dist
 .wrangler
 *.tsbuildinfo
 node_modules/.tmp
+PROJECT_PLAN.md
