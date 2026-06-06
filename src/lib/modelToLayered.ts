@@ -4,7 +4,7 @@ import { ThreeMFLoader } from "three/examples/jsm/loaders/3MFLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { bambuPlaBasicColors } from "../data/bambuPlaBasic";
 import { findNearestColor } from "./color";
-import type { BeadColor, LayeredPattern, Rgb } from "../types";
+import type { BeadColor, LayeredPattern, ModelOrientation, ModelPreviewData, Rgb } from "../types";
 
 type Triangle = {
   a: THREE.Vector3;
@@ -66,6 +66,11 @@ type ModelSliceSettings = {
   beadHeightMm: number;
   targetLayers: number;
   colorId: string;
+  orientation?: ModelOrientation;
+};
+
+type ModelPreviewSettings = {
+  colorId: string;
 };
 
 const EPSILON = 1e-6;
@@ -77,14 +82,28 @@ const bambuPaintColorExtruderIndices = new Map([
   ["1C", 3],
 ]);
 
+export async function modelFileToPreviewData(file: File, settings: ModelPreviewSettings): Promise<ModelPreviewData> {
+  const { fileType, parsedModel } = await parseModelFile(file, settings.colorId);
+  if (parsedModel.triangles.length === 0) {
+    throw new Error("模型中没有可预览的三角面");
+  }
+
+  const bounds = getBounds(parsedModel.triangles);
+
+  return {
+    fileName: file.name,
+    fileType,
+    triangleCount: parsedModel.triangles.length,
+    palette: parsedModel.palette,
+    bounds: serializeBounds(bounds),
+    triangles: parsedModel.triangles.map(serializeTriangle),
+  };
+}
+
 export async function modelFileToLayeredPattern(file: File, settings: ModelSliceSettings): Promise<LayeredPattern> {
   const sliceSettings = normalizeModelSliceSettings(settings);
-  const fileType = getModelFileType(file.name);
-  const buffer = await file.arrayBuffer();
-  const parsedModel = fileType === "stl"
-    ? trianglesFromStl(buffer, sliceSettings.colorId)
-    : trianglesFrom3mf(buffer, sliceSettings.colorId);
-  const rawTriangles = parsedModel.triangles;
+  const { fileType, parsedModel } = await parseModelFile(file, sliceSettings.colorId);
+  const rawTriangles = orientTriangles(parsedModel.triangles, sliceSettings.orientation);
 
   if (rawTriangles.length === 0) {
     throw new Error("模型中没有可切片的三角面");
@@ -122,6 +141,7 @@ export async function modelFileToLayeredPattern(file: File, settings: ModelSlice
       beadPitchMm: sliceSettings.beadPitchMm,
       beadHeightMm: sliceSettings.beadHeightMm,
       targetLayers: sliceSettings.targetLayers,
+      orientation: sliceSettings.orientation,
     },
     layers,
     palette: parsedModel.palette,
@@ -136,7 +156,79 @@ function normalizeModelSliceSettings(settings: ModelSliceSettings): ModelSliceSe
     beadPitchMm: clampPositive(settings.beadPitchMm, 2.6),
     beadHeightMm: clampPositive(settings.beadHeightMm, 3),
     targetLayers: Math.max(0, Math.round(settings.targetLayers)),
+    orientation: normalizeModelOrientation(settings.orientation),
   };
+}
+
+async function parseModelFile(file: File, fallbackColorId: string) {
+  const fileType = getModelFileType(file.name);
+  const buffer = await file.arrayBuffer();
+  const parsedModel = fileType === "stl"
+    ? trianglesFromStl(buffer, fallbackColorId)
+    : trianglesFrom3mf(buffer, fallbackColorId);
+  return { fileType, parsedModel };
+}
+
+function serializeTriangle(triangle: Triangle) {
+  return {
+    a: serializeVector(triangle.a),
+    b: serializeVector(triangle.b),
+    c: serializeVector(triangle.c),
+    colorId: triangle.colorId,
+  };
+}
+
+function serializeBounds(bounds: THREE.Box3): ModelPreviewData["bounds"] {
+  return {
+    min: serializeVector(bounds.min),
+    max: serializeVector(bounds.max),
+  };
+}
+
+function serializeVector(vector: THREE.Vector3): [number, number, number] {
+  return [vector.x, vector.y, vector.z];
+}
+
+function normalizeModelOrientation(orientation: ModelOrientation | undefined): ModelOrientation {
+  return {
+    rotateXDeg: normalizeRotationDegrees(orientation?.rotateXDeg ?? 0),
+    rotateYDeg: normalizeRotationDegrees(orientation?.rotateYDeg ?? 0),
+    rotateZDeg: normalizeRotationDegrees(orientation?.rotateZDeg ?? 0),
+  };
+}
+
+function normalizeRotationDegrees(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const normalized = Math.round(value) % 360;
+  return normalized < 0 ? normalized + 360 : normalized;
+}
+
+function orientTriangles(triangles: Triangle[], orientation: ModelOrientation | undefined): Triangle[] {
+  const normalizedOrientation = normalizeModelOrientation(orientation);
+  if (
+    normalizedOrientation.rotateXDeg === 0
+    && normalizedOrientation.rotateYDeg === 0
+    && normalizedOrientation.rotateZDeg === 0
+  ) {
+    return triangles;
+  }
+
+  const bounds = getBounds(triangles);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const matrix = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(normalizedOrientation.rotateXDeg),
+    THREE.MathUtils.degToRad(normalizedOrientation.rotateYDeg),
+    THREE.MathUtils.degToRad(normalizedOrientation.rotateZDeg),
+    "XYZ",
+  ));
+  const orientPoint = (point: THREE.Vector3) => point.clone().sub(center).applyMatrix4(matrix);
+
+  return triangles.map((triangle) => ({
+    a: orientPoint(triangle.a),
+    b: orientPoint(triangle.b),
+    c: orientPoint(triangle.c),
+    colorId: triangle.colorId,
+  }));
 }
 
 function getModelFileType(fileName: string): "stl" | "3mf" {
@@ -155,12 +247,15 @@ function trianglesFromStl(buffer: ArrayBuffer, fallbackColorId: string): ParsedM
 }
 
 function trianglesFrom3mf(buffer: ArrayBuffer, fallbackColorId: string): ParsedModel {
-  const projectModel = trianglesFromBambu3mf(buffer, fallbackColorId);
-  if (projectModel && projectModel.triangles.length > 0) return projectModel;
+  const archiveModel = trianglesFrom3mfArchive(buffer, fallbackColorId);
+  if (archiveModel && archiveModel.triangles.length > 0) return archiveModel;
+
+  if (typeof DOMParser === "undefined") {
+    throw new Error("当前浏览器线程无法解析此 3MF 格式，请尝试从 Bambu Studio 重新导出 3MF");
+  }
 
   const group = new ThreeMFLoader().parse(buffer);
   const triangles: Triangle[] = [];
-
   group.updateMatrixWorld(true);
   group.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
@@ -170,7 +265,7 @@ function trianglesFrom3mf(buffer: ArrayBuffer, fallbackColorId: string): ParsedM
   return { triangles, palette: bambuPlaBasicColors };
 }
 
-function trianglesFromBambu3mf(buffer: ArrayBuffer, fallbackColorId: string): ParsedModel | null {
+function trianglesFrom3mfArchive(buffer: ArrayBuffer, fallbackColorId: string): ParsedModel | null {
   let archive: ThreeMfPackage;
   try {
     archive = unzipSync(new Uint8Array(buffer));
@@ -179,8 +274,6 @@ function trianglesFromBambu3mf(buffer: ArrayBuffer, fallbackColorId: string): Pa
   }
 
   const projectColorData = getBambuProjectColorData(archive, fallbackColorId);
-  if (!projectColorData) return null;
-
   const rootModel = parseThreeMfModel(archive, "3D/3dmodel.model");
   if (!rootModel) return null;
 
@@ -202,7 +295,7 @@ function trianglesFromBambu3mf(buffer: ArrayBuffer, fallbackColorId: string): Pa
 
   return {
     triangles,
-    palette: mergePalettes(bambuPlaBasicColors, projectColorData.filamentColors),
+    palette: projectColorData ? mergePalettes(bambuPlaBasicColors, projectColorData.filamentColors) : bambuPlaBasicColors,
   };
 }
 
@@ -222,20 +315,21 @@ function appendBambuObjectTriangles({
   objectId: string;
   matrix: THREE.Matrix4;
   colorId: string;
-  projectColorData: BambuProjectColorData;
+  projectColorData: BambuProjectColorData | null;
   triangles: Triangle[];
 }) {
   const object = model.objects.get(objectId);
   if (!object) return;
+  const objectColorId = getBambuPartColorId(object.id, colorId, projectColorData);
 
   if (object.triangles.length > 0) {
-    appendThreeMfMeshTriangles(triangles, object, matrix, getBambuPartColorId(object.id, colorId, projectColorData), projectColorData);
+    appendThreeMfMeshTriangles(triangles, object, matrix, objectColorId, projectColorData);
     return;
   }
 
   for (const component of object.components) {
     const nextMatrix = new THREE.Matrix4().multiplyMatrices(matrix, component.transform);
-    const componentColorId = getBambuPartColorId(component.objectId, colorId, projectColorData);
+    const componentColorId = getBambuPartColorId(component.objectId, objectColorId, projectColorData);
 
     if (component.path) {
       const modelPath = normalizeThreeMfPath(component.path);
@@ -272,7 +366,7 @@ function appendBambuObjectTriangles({
   }
 }
 
-function appendThreeMfMeshTriangles(target: Triangle[], object: ThreeMfObject, matrix: THREE.Matrix4, colorId: string, projectColorData: BambuProjectColorData) {
+function appendThreeMfMeshTriangles(target: Triangle[], object: ThreeMfObject, matrix: THREE.Matrix4, colorId: string, projectColorData: BambuProjectColorData | null) {
   for (const triangle of object.triangles) {
     const [aIndex, bIndex, cIndex] = triangle.vertices;
     const a = object.vertices[aIndex];
@@ -302,24 +396,23 @@ function getBambuProjectColorData(archive: ThreeMfPackage, fallbackColorId: stri
   const filamentColors = filamentColorValues.map((hex, index) => createThreeMfFilamentColor(hex, index, filamentIds[index], fallbackColorId));
   if (filamentColors.length === 0) return null;
 
-  const modelSettings = new DOMParser().parseFromString(modelSettingsText, "application/xml");
   const partExtruders = new Map<string, number>();
-  for (const objectNode of modelSettings.querySelectorAll("object")) {
-    const objectId = objectNode.getAttribute("id");
+  for (const objectNode of findXmlElements(modelSettingsText, "object")) {
+    const objectId = objectNode.attributes.get("id");
     if (!objectId) continue;
 
-    const extruder = findMetadataValue(objectNode, "extruder");
+    const extruder = findMetadataValue(objectNode.body, "extruder");
     const extruderIndex = parseExtruderIndex(extruder);
     if (extruderIndex !== null) {
       partExtruders.set(objectId, extruderIndex);
     }
   }
 
-  for (const partNode of modelSettings.querySelectorAll("part")) {
-    const partId = partNode.getAttribute("id");
+  for (const partNode of findXmlElements(modelSettingsText, "part")) {
+    const partId = partNode.attributes.get("id");
     if (!partId) continue;
 
-    const extruder = findMetadataValue(partNode, "extruder");
+    const extruder = findMetadataValue(partNode.body, "extruder");
     const extruderIndex = parseExtruderIndex(extruder);
     if (extruderIndex !== null) {
       partExtruders.set(partId, extruderIndex);
@@ -329,13 +422,15 @@ function getBambuProjectColorData(archive: ThreeMfPackage, fallbackColorId: stri
   return { filamentColors, partExtruders };
 }
 
-function getBambuPartColorId(partId: string, fallbackColorId: string, projectColorData: BambuProjectColorData): string {
+function getBambuPartColorId(partId: string, fallbackColorId: string, projectColorData: BambuProjectColorData | null): string {
+  if (!projectColorData) return fallbackColorId;
   const extruderIndex = projectColorData.partExtruders.get(partId);
   if (extruderIndex === undefined) return fallbackColorId;
   return projectColorData.filamentColors[extruderIndex]?.id ?? fallbackColorId;
 }
 
-function getBambuPaintColorId(paintColor: string | null, fallbackColorId: string, projectColorData: BambuProjectColorData): string {
+function getBambuPaintColorId(paintColor: string | null, fallbackColorId: string, projectColorData: BambuProjectColorData | null): string {
+  if (!projectColorData) return fallbackColorId;
   const code = getBambuPaintColorCode(paintColor);
   if (!code) return fallbackColorId;
 
@@ -397,55 +492,54 @@ function parseThreeMfModel(archive: ThreeMfPackage, path: string) {
   const modelText = decodeArchiveText(archive, path);
   if (!modelText) return null;
 
-  const document = new DOMParser().parseFromString(modelText, "application/xml");
   const objects = new Map<string, ThreeMfObject>();
   const build: ThreeMfBuildItem[] = [];
 
-  for (const objectNode of document.querySelectorAll("resources > object")) {
-    const id = objectNode.getAttribute("id");
+  for (const objectNode of findXmlElements(getXmlElementBody(modelText, "resources") ?? modelText, "object")) {
+    const id = objectNode.attributes.get("id");
     if (!id) continue;
 
     const vertices: THREE.Vector3[] = [];
     const triangles: ThreeMfTriangle[] = [];
     const components: ThreeMfComponent[] = [];
 
-    for (const vertexNode of objectNode.querySelectorAll("mesh > vertices > vertex")) {
+    for (const vertexNode of findXmlStartTags(getXmlElementBody(objectNode.body, "vertices") ?? "", "vertex")) {
       vertices.push(new THREE.Vector3(
-        parseFloatAttribute(vertexNode, "x"),
-        parseFloatAttribute(vertexNode, "y"),
-        parseFloatAttribute(vertexNode, "z"),
+        parseFloatAttribute(vertexNode.attributes, "x"),
+        parseFloatAttribute(vertexNode.attributes, "y"),
+        parseFloatAttribute(vertexNode.attributes, "z"),
       ));
     }
 
-    for (const triangleNode of objectNode.querySelectorAll("mesh > triangles > triangle")) {
+    for (const triangleNode of findXmlStartTags(getXmlElementBody(objectNode.body, "triangles") ?? "", "triangle")) {
       triangles.push({
         vertices: [
-          parseIntAttribute(triangleNode, "v1"),
-          parseIntAttribute(triangleNode, "v2"),
-          parseIntAttribute(triangleNode, "v3"),
+          parseIntAttribute(triangleNode.attributes, "v1"),
+          parseIntAttribute(triangleNode.attributes, "v2"),
+          parseIntAttribute(triangleNode.attributes, "v3"),
         ],
-        paintColor: triangleNode.getAttribute("paint_color"),
+        paintColor: triangleNode.attributes.get("paint_color") ?? null,
       });
     }
 
-    for (const componentNode of objectNode.querySelectorAll("components > component")) {
-      const componentObjectId = componentNode.getAttribute("objectid");
+    for (const componentNode of findXmlStartTags(getXmlElementBody(objectNode.body, "components") ?? "", "component")) {
+      const componentObjectId = componentNode.attributes.get("objectid");
       if (!componentObjectId) continue;
 
       components.push({
         objectId: componentObjectId,
-        path: componentNode.getAttribute("p:path"),
-        transform: parseThreeMfTransform(componentNode.getAttribute("transform")),
+        path: componentNode.attributes.get("p:path") ?? null,
+        transform: parseThreeMfTransform(componentNode.attributes.get("transform") ?? null),
       });
     }
 
     objects.set(id, { id, vertices, triangles, components });
   }
 
-  for (const itemNode of document.querySelectorAll("build > item")) {
-    const objectId = itemNode.getAttribute("objectid");
+  for (const itemNode of findXmlStartTags(getXmlElementBody(modelText, "build") ?? "", "item")) {
+    const objectId = itemNode.attributes.get("objectid");
     if (!objectId) continue;
-    build.push({ objectId, transform: parseThreeMfTransform(itemNode.getAttribute("transform")) });
+    build.push({ objectId, transform: parseThreeMfTransform(itemNode.attributes.get("transform") ?? null) });
   }
 
   return { objects, build };
@@ -465,23 +559,101 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
-function findMetadataValue(node: Element, key: string): string | null {
-  for (const metadataNode of node.querySelectorAll("metadata")) {
-    if (metadataNode.getAttribute("key") === key) {
-      return metadataNode.getAttribute("value");
+function findMetadataValue(xml: string, key: string): string | null {
+  for (const metadataNode of findXmlStartTags(xml, "metadata")) {
+    if (metadataNode.attributes.get("key") === key) {
+      return metadataNode.attributes.get("value") ?? null;
     }
   }
   return null;
 }
 
-function parseFloatAttribute(node: Element, name: string): number {
-  const value = Number.parseFloat(node.getAttribute(name) ?? "0");
+function parseFloatAttribute(attributes: Map<string, string>, name: string): number {
+  const value = Number.parseFloat(attributes.get(name) ?? "0");
   return Number.isFinite(value) ? value : 0;
 }
 
-function parseIntAttribute(node: Element, name: string): number {
-  const value = Number.parseInt(node.getAttribute(name) ?? "0", 10);
+function parseIntAttribute(attributes: Map<string, string>, name: string): number {
+  const value = Number.parseInt(attributes.get(name) ?? "0", 10);
   return Number.isFinite(value) ? value : 0;
+}
+
+function getXmlElementBody(xml: string, tagName: string): string | null {
+  return findXmlElements(xml, tagName)[0]?.body ?? null;
+}
+
+function findXmlElements(xml: string, tagName: string): Array<{ attributes: Map<string, string>; body: string }> {
+  const elements: Array<{ attributes: Map<string, string>; body: string }> = [];
+  const openTagPattern = createXmlOpenTagPattern(tagName);
+  let match: RegExpExecArray | null;
+
+  while ((match = openTagPattern.exec(xml))) {
+    const openTag = match[0];
+    const openTagEnd = openTagPattern.lastIndex;
+    const attributes = parseXmlAttributes(openTag);
+    if (/\/\s*>$/.test(openTag)) {
+      elements.push({ attributes, body: "" });
+      continue;
+    }
+
+    const closeTagPattern = createXmlCloseTagPattern(tagName);
+    closeTagPattern.lastIndex = openTagEnd;
+    const closeMatch = closeTagPattern.exec(xml);
+    if (!closeMatch) continue;
+
+    elements.push({
+      attributes,
+      body: xml.slice(openTagEnd, closeMatch.index),
+    });
+    openTagPattern.lastIndex = closeTagPattern.lastIndex;
+  }
+
+  return elements;
+}
+
+function findXmlStartTags(xml: string, tagName: string): Array<{ attributes: Map<string, string> }> {
+  const tags: Array<{ attributes: Map<string, string> }> = [];
+  const openTagPattern = createXmlOpenTagPattern(tagName);
+  let match: RegExpExecArray | null;
+  while ((match = openTagPattern.exec(xml))) {
+    tags.push({ attributes: parseXmlAttributes(match[0]) });
+  }
+  return tags;
+}
+
+function createXmlOpenTagPattern(tagName: string): RegExp {
+  return new RegExp(`<(?:[\\w.-]+:)?${escapeRegExp(tagName)}\\b[^>]*>`, "gi");
+}
+
+function createXmlCloseTagPattern(tagName: string): RegExp {
+  return new RegExp(`</(?:[\\w.-]+:)?${escapeRegExp(tagName)}\\s*>`, "gi");
+}
+
+function parseXmlAttributes(tag: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  const attributePattern = /([^\s=<>/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = attributePattern.exec(tag))) {
+    const name = match[1];
+    const value = match[2] ?? match[3] ?? "";
+    if (name) attributes.set(name, decodeXmlEntities(value));
+  }
+
+  return attributes;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function parseThreeMfTransform(transform: string | null): THREE.Matrix4 {

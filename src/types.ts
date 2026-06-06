@@ -20,6 +20,31 @@ export type BeadColor = {
   materialId?: string;
 };
 
+export type ModelOrientation = {
+  rotateXDeg: number;
+  rotateYDeg: number;
+  rotateZDeg: number;
+};
+
+export type ModelPreviewTriangle = {
+  a: [number, number, number];
+  b: [number, number, number];
+  c: [number, number, number];
+  colorId: string;
+};
+
+export type ModelPreviewData = {
+  fileName: string;
+  fileType: "stl" | "3mf";
+  triangleCount: number;
+  palette: BeadColor[];
+  bounds: {
+    min: [number, number, number];
+    max: [number, number, number];
+  };
+  triangles: ModelPreviewTriangle[];
+};
+
 export type PatternSettings = {
   width: number;
   height: number;
@@ -61,6 +86,7 @@ export type LayeredPattern = {
     beadPitchMm: number;
     beadHeightMm: number;
     targetLayers?: number;
+    orientation?: ModelOrientation;
   };
   layers: Array<{
     index: number;

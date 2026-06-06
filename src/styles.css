@@ -545,6 +545,23 @@ button:focus-visible {
   margin-bottom: 12px;
 }
 
+.model-orientation-panel {
+  display: grid;
+  gap: 8px;
+  margin: 2px 0 12px;
+}
+
+.axis-button-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.axis-button-row .button {
+  min-width: 0;
+  padding: 0 8px;
+}
+
 .metric-row {
   justify-content: space-between;
   margin-bottom: 10px;
@@ -573,6 +590,14 @@ button:focus-visible {
   border: 1px solid #cbd5e1;
   border-radius: 7px;
   background: #ffffff;
+}
+
+.segmented-control.one-way {
+  grid-template-columns: minmax(72px, 1fr);
+}
+
+.segmented-control.three-way {
+  grid-template-columns: repeat(3, minmax(54px, 1fr));
 }
 
 .segmented-control button {

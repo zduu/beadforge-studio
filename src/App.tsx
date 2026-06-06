@@ -29,8 +29,10 @@ import {
 } from "./lib/export";
 import { imageFileToPattern } from "./lib/imageToPattern";
 import { layeredPatternToPattern } from "./lib/layeredPattern";
+import type { ModelWorkerJobRequest, ModelWorkerRequest, ModelWorkerResponse } from "./lib/modelWorkerMessages";
 import { cropPatternToRect, getAllPatternColors, getColorUsage, isPatternBackgroundCell, replacePatternColor, setPatternBackground, setPatternCell, validatePattern } from "./lib/pattern";
 import type { ColorUsage, CropRect, FitMode, LayeredPattern, Pattern, PatternSettings, SampleMode } from "./types";
+import type { ModelOrientation, ModelPreviewData } from "./types";
 
 const DEFAULT_SETTINGS: PatternSettings = {
   width: 32,
@@ -49,10 +51,17 @@ const DEFAULT_MODEL_SLICE_SETTINGS = {
   targetLayers: 0,
 };
 
+const DEFAULT_MODEL_ORIENTATION: ModelOrientation = {
+  rotateXDeg: 0,
+  rotateYDeg: 0,
+  rotateZDeg: 0,
+};
+
 const SIZE_PRESETS = [32, 48, 64, 80];
 const LayeredModelPreview = lazy(() => import("./components/LayeredModelPreview").then((module) => ({ default: module.LayeredModelPreview })));
+const ModelFilePreview = lazy(() => import("./components/ModelFilePreview").then((module) => ({ default: module.ModelFilePreview })));
 
-type PreviewMode = "layer" | "model";
+type PreviewMode = "layer" | "model" | "source-model";
 type EditTool = "brush" | "eraser" | "inspect";
 type CropMode = "source" | "preview";
 
@@ -71,6 +80,7 @@ type UndoSnapshot = {
 
 const DEFAULT_BACKGROUND_COLOR_ID = "bambu-pla-basic-jade-white";
 const MAX_UNDO_STEPS = 80;
+const MODEL_JOB_CANCELLED = "MODEL_JOB_CANCELLED";
 
 function App() {
   const [settings, setSettings] = useState<PatternSettings>(DEFAULT_SETTINGS);
@@ -103,12 +113,17 @@ function App() {
     targetLayers: "",
   });
   const [modelSourceFile, setModelSourceFile] = useState<File | null>(null);
+  const [modelPreviewData, setModelPreviewData] = useState<ModelPreviewData | null>(null);
+  const [modelOrientation, setModelOrientation] = useState<ModelOrientation>(DEFAULT_MODEL_ORIENTATION);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isModelProcessing, setIsModelProcessing] = useState(false);
   const [status, setStatus] = useState("等待图片");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const projectInputRef = useRef<HTMLInputElement | null>(null);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
+  const modelWorkerRef = useRef<Worker | null>(null);
+  const modelJobIdRef = useRef(0);
+  const modelJobRejectRef = useRef<((error: Error) => void) | null>(null);
 
   const usage = useMemo(() => {
     if (layeredPattern && previewMode === "model") {
@@ -150,6 +165,14 @@ function App() {
     return () => URL.revokeObjectURL(nextUrl);
   }, [sourceFile]);
 
+  useEffect(() => {
+    return () => {
+      modelWorkerRef.current?.terminate();
+      modelWorkerRef.current = null;
+      modelJobRejectRef.current = null;
+    };
+  }, []);
+
   const generatePattern = async (file = sourceFile, nextSettings = settings) => {
     if (!file) {
       setStatus("请选择图片");
@@ -165,6 +188,9 @@ function App() {
       setUndoStack([]);
       setSettings(normalizedSettings);
       setLayeredPattern(null);
+      setModelSourceFile(null);
+      setModelPreviewData(null);
+      setModelOrientation(DEFAULT_MODEL_ORIENTATION);
       setActiveLayerIndex(0);
       setPreviewMode("layer");
       setPreviewCropRect(null);
@@ -242,6 +268,9 @@ function App() {
       setUndoStack([]);
       setBackgroundColorId(normalizedImported.backgroundColorId ?? backgroundColorId);
       setLayeredPattern(null);
+      setModelSourceFile(null);
+      setModelPreviewData(null);
+      setModelOrientation(DEFAULT_MODEL_ORIENTATION);
       setActiveLayerIndex(0);
       setPreviewMode("layer");
       setSettings(normalizedImported.settings);
@@ -380,21 +409,79 @@ function App() {
     setStatus(`已修改 ${x + 1}, ${y + 1}`);
   };
 
+  const runModelWorkerJob = <T,>(
+    request: ModelWorkerJobRequest,
+    readResponse: (response: Extract<ModelWorkerResponse, { ok: true }>) => T,
+  ) => new Promise<T>((resolve, reject) => {
+    if (modelWorkerRef.current) {
+      modelWorkerRef.current.terminate();
+      modelWorkerRef.current = null;
+      modelJobRejectRef.current?.(new Error(MODEL_JOB_CANCELLED));
+      modelJobRejectRef.current = null;
+    }
+
+    const jobId = modelJobIdRef.current + 1;
+    modelJobIdRef.current = jobId;
+    const worker = new Worker(new URL("./workers/modelWorker.ts", import.meta.url), { type: "module" });
+    modelWorkerRef.current = worker;
+    modelJobRejectRef.current = reject;
+
+    const cleanup = () => {
+      worker.terminate();
+      if (modelWorkerRef.current === worker) modelWorkerRef.current = null;
+      if (modelJobRejectRef.current === reject) modelJobRejectRef.current = null;
+    };
+
+    worker.onmessage = (event: MessageEvent<ModelWorkerResponse>) => {
+      const response = event.data;
+      if (response.id !== jobId) return;
+
+      cleanup();
+      if (!response.ok) {
+        reject(new Error(response.error));
+        return;
+      }
+
+      try {
+        resolve(readResponse(response));
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error("本机模型处理响应无效"));
+      }
+    };
+
+    worker.onerror = () => {
+      cleanup();
+      reject(new Error("本机模型处理线程异常"));
+    };
+
+    worker.postMessage({ ...request, id: jobId } as ModelWorkerRequest);
+  });
+
   const sliceModelFile = async (file: File) => {
     setIsModelProcessing(true);
-    setStatus("正在切片模型");
+    setStatus("正在本机切片模型");
     try {
-      const { modelFileToLayeredPattern } = await import("./lib/modelToLayered");
       const normalizedModelSliceSettings = getModelSliceSettingsFromDrafts(modelSliceDrafts);
       setModelSliceSettings(normalizedModelSliceSettings);
-      const nextLayeredPattern = await modelFileToLayeredPattern(file, {
-        width: settings.width,
-        height: settings.height,
-        beadPitchMm: normalizedModelSliceSettings.beadPitchMm,
-        beadHeightMm: normalizedModelSliceSettings.beadHeightMm,
-        targetLayers: normalizedModelSliceSettings.targetLayers,
-        colorId: modelColorId,
-      });
+      const nextLayeredPattern = await runModelWorkerJob(
+        {
+          type: "slice",
+          file,
+          settings: {
+            width: settings.width,
+            height: settings.height,
+            beadPitchMm: normalizedModelSliceSettings.beadPitchMm,
+            beadHeightMm: normalizedModelSliceSettings.beadHeightMm,
+            targetLayers: normalizedModelSliceSettings.targetLayers,
+            colorId: modelColorId,
+            orientation: modelOrientation,
+          },
+        },
+        (response) => {
+          if (response.type !== "slice") throw new Error("本机模型处理响应无效");
+          return response.layeredPattern;
+        },
+      );
       setLayeredPattern(nextLayeredPattern);
       setModelSourceFile(file);
       setUndoStack([]);
@@ -405,9 +492,46 @@ function App() {
       setSourceFile(null);
       setPreviewCropRect(null);
       setSelectedColorId(null);
-      setStatus(`已生成 ${nextLayeredPattern.layers.length} 层模型图纸`);
+      setStatus(`本机已生成 ${nextLayeredPattern.layers.length} 层模型图纸`);
     } catch (error) {
+      if (isModelJobCancelled(error)) return;
       setStatus(error instanceof Error ? error.message : "模型切片失败");
+    } finally {
+      setIsModelProcessing(false);
+    }
+  };
+
+  const loadModelFile = async (file: File) => {
+    setIsModelProcessing(true);
+    setStatus("正在本机读取模型预览");
+    try {
+      const nextPreviewData = await runModelWorkerJob(
+        {
+          type: "preview",
+          file,
+          colorId: modelColorId,
+        },
+        (response) => {
+          if (response.type !== "preview") throw new Error("本机模型处理响应无效");
+          return response.previewData;
+        },
+      );
+      setModelSourceFile(file);
+      setModelPreviewData(nextPreviewData);
+      setModelOrientation(DEFAULT_MODEL_ORIENTATION);
+      setLayeredPattern(null);
+      setPattern(null);
+      setUndoStack([]);
+      setActiveLayerIndex(0);
+      setPreviewMode("source-model");
+      setBackgroundColorId(null);
+      setSourceFile(null);
+      setPreviewCropRect(null);
+      setSelectedColorId(null);
+      setStatus(`本机已载入模型预览 · ${nextPreviewData.triangleCount} 个三角面`);
+    } catch (error) {
+      if (isModelJobCancelled(error)) return;
+      setStatus(error instanceof Error ? error.message : "模型预览失败");
     } finally {
       setIsModelProcessing(false);
     }
@@ -418,7 +542,7 @@ function App() {
     if (!file) return;
 
     try {
-      await sliceModelFile(file);
+      await loadModelFile(file);
     } finally {
       event.target.value = "";
     }
@@ -456,6 +580,35 @@ function App() {
     setSelectedColorId(null);
     setStatus("已旋转图纸");
   };
+
+  const rotateModelOrientation = (axis: keyof ModelOrientation) => {
+    setModelOrientation((orientation) => ({
+      ...orientation,
+      [axis]: normalizeRotationDegrees(orientation[axis] + 90),
+    }));
+    if (modelPreviewData) setPreviewMode("source-model");
+    setStatus("模型方向已调整，点击开始切片生成层图");
+  };
+
+  const resetModelOrientation = () => {
+    setModelOrientation(DEFAULT_MODEL_ORIENTATION);
+    if (modelPreviewData) setPreviewMode("source-model");
+    setStatus("模型方向已重置");
+  };
+
+  const cancelModelJob = () => {
+    const reject = modelJobRejectRef.current;
+    modelWorkerRef.current?.terminate();
+    modelWorkerRef.current = null;
+    modelJobRejectRef.current = null;
+    modelJobIdRef.current += 1;
+    reject?.(new Error(MODEL_JOB_CANCELLED));
+    setIsModelProcessing(false);
+    setStatus("本机处理已取消");
+  };
+
+  const isSourceModelPreview = Boolean(modelPreviewData && previewMode === "source-model");
+  const isLayeredModelPreview = Boolean(layeredPattern && previewMode === "model");
 
   return (
     <main className="app-shell">
@@ -661,14 +814,44 @@ function App() {
                 ))}
               </select>
             </label>
+            <div className="model-orientation-panel">
+              <div className="metric-row">
+                <span>模型方向</span>
+                <strong>
+                  X {modelOrientation.rotateXDeg}° · Y {modelOrientation.rotateYDeg}° · Z {modelOrientation.rotateZDeg}°
+                </strong>
+              </div>
+              <div className="axis-button-row" aria-label="模型方向旋转">
+                <button className="button" disabled={!modelSourceFile || isModelProcessing} onClick={() => rotateModelOrientation("rotateXDeg")} title="绕 X 轴旋转" type="button">
+                  <RotateCw size={16} />
+                  X
+                </button>
+                <button className="button" disabled={!modelSourceFile || isModelProcessing} onClick={() => rotateModelOrientation("rotateYDeg")} title="绕 Y 轴旋转" type="button">
+                  <RotateCw size={16} />
+                  Y
+                </button>
+                <button className="button" disabled={!modelSourceFile || isModelProcessing} onClick={() => rotateModelOrientation("rotateZDeg")} title="绕 Z 轴旋转" type="button">
+                  <RotateCw size={16} />
+                  Z
+                </button>
+                <button className="button" disabled={!modelSourceFile || isModelProcessing} onClick={resetModelOrientation} title="重置模型方向" type="button">
+                  <RotateCcw size={16} />
+                </button>
+              </div>
+            </div>
             <button className="button full" disabled={isModelProcessing} onClick={() => modelInputRef.current?.click()} type="button">
               <Layers size={18} />
-              STL / 3MF 切片
+              上传模型
             </button>
-            <button className="button full" disabled={!modelSourceFile || isModelProcessing} onClick={() => modelSourceFile && void sliceModelFile(modelSourceFile)} type="button">
-              <RotateCw size={18} />
-              重新切片
+            <button className="button primary full" disabled={!modelSourceFile || isModelProcessing} onClick={() => modelSourceFile && void sliceModelFile(modelSourceFile)} type="button">
+              <Layers size={18} />
+              {layeredPattern ? "重新切片" : "开始切片"}
             </button>
+            {isModelProcessing && (
+              <button className="button full" onClick={cancelModelJob} type="button">
+                取消本机处理
+              </button>
+            )}
             {layeredPattern && (
               <div className="layer-list">
                 {layeredPattern.layers.map((layer, index) => (
@@ -690,11 +873,11 @@ function App() {
         <section className="preview-area">
           <div className="preview-toolbar">
             <div>
-              <h2>{layeredPattern && previewMode === "model" ? "整体模型" : pattern ? `${pattern.width} x ${pattern.height}` : "预览"}</h2>
+              <h2>{isSourceModelPreview ? "模型预览" : isLayeredModelPreview ? "整体模型" : pattern ? `${pattern.width} x ${pattern.height}` : "预览"}</h2>
               <p>{status}</p>
             </div>
             <div className="export-actions">
-              {!(layeredPattern && previewMode === "model") && (
+              {!isLayeredModelPreview && !isSourceModelPreview && (
                 <div className="zoom-actions" aria-label="预览缩放">
                   <button className="icon-button" onClick={() => setPreviewZoom((zoom) => Math.max(0.1, Number((zoom - 0.25).toFixed(2))))} title="缩小" type="button">
                     <ZoomOut size={18} />
@@ -716,17 +899,26 @@ function App() {
                   </button>
                 </div>
               )}
-              {layeredPattern && (
-                <div className="segmented-control" aria-label="预览模式">
-                  <button className={previewMode === "layer" ? "active" : ""} onClick={() => setPreviewMode("layer")} type="button">
-                    当前层
-                  </button>
-                  <button className={previewMode === "model" ? "active" : ""} onClick={() => setPreviewMode("model")} type="button">
-                    整体
-                  </button>
+              {(modelPreviewData || layeredPattern) && (
+                <div className={`segmented-control ${modelPreviewData && layeredPattern ? "three-way" : modelPreviewData ? "one-way" : ""}`} aria-label="预览模式">
+                  {modelPreviewData && (
+                    <button className={previewMode === "source-model" ? "active" : ""} onClick={() => setPreviewMode("source-model")} type="button">
+                      原模型
+                    </button>
+                  )}
+                  {layeredPattern && (
+                    <>
+                      <button className={previewMode === "layer" ? "active" : ""} onClick={() => setPreviewMode("layer")} type="button">
+                        当前层
+                      </button>
+                      <button className={previewMode === "model" ? "active" : ""} onClick={() => setPreviewMode("model")} type="button">
+                        整体
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
-              {pattern && !(layeredPattern && previewMode === "model") && (
+              {pattern && !isLayeredModelPreview && !isSourceModelPreview && (
                 <button className="icon-button" onClick={rotateCurrentView} title="顺时针旋转" type="button">
                   <RotateCw size={18} />
                 </button>
@@ -748,7 +940,11 @@ function App() {
               </button>
             </div>
           </div>
-          {layeredPattern && previewMode === "model" ? (
+          {modelPreviewData && previewMode === "source-model" ? (
+            <Suspense fallback={<div className="preview-loading">加载模型预览</div>}>
+              <ModelFilePreview orientation={modelOrientation} previewData={modelPreviewData} />
+            </Suspense>
+          ) : layeredPattern && previewMode === "model" ? (
             <Suspense fallback={<div className="preview-loading">加载整体模型</div>}>
               <LayeredModelPreview layeredPattern={layeredPattern} activeLayerIndex={activeLayerIndex} />
             </Suspense>
@@ -927,6 +1123,16 @@ function clampDecimal(value: number, min: number, max: number): number {
 
 function formatModelNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+}
+
+function isModelJobCancelled(error: unknown): boolean {
+  return error instanceof Error && error.message === MODEL_JOB_CANCELLED;
+}
+
+function normalizeRotationDegrees(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const normalized = Math.round(value) % 360;
+  return normalized < 0 ? normalized + 360 : normalized;
 }
 
 function clampUnit(value: number): number {
