@@ -4,7 +4,7 @@ import { ThreeMFLoader } from "three/examples/jsm/loaders/3MFLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { bambuPlaBasicColors } from "../data/bambuPlaBasic";
 import { findNearestColor } from "./color";
-import type { BeadColor, LayeredPattern, ModelOrientation, ModelPreviewData, Rgb } from "../types";
+import type { BeadColor, LayeredPattern, ModelBoundsSummary, ModelOrientation, ModelPreviewData, ModelSupportSettings, Rgb } from "../types";
 
 type Triangle = {
   a: THREE.Vector3;
@@ -67,6 +67,7 @@ type ModelSliceSettings = {
   targetLayers: number;
   colorId: string;
   orientation?: ModelOrientation;
+  support?: ModelSupportSettings;
 };
 
 type ModelPreviewSettings = {
@@ -109,17 +110,33 @@ export async function modelFileToLayeredPattern(file: File, settings: ModelSlice
     throw new Error("模型中没有可切片的三角面");
   }
 
+  const originalBounds = getBounds(parsedModel.triangles);
+  const orientedBounds = getBounds(rawTriangles);
+  const scaleDetails = getScaleDetails(rawTriangles, sliceSettings);
   const triangles = normalizeTriangles(rawTriangles, sliceSettings);
   const layerCount = getLayerCount(triangles, sliceSettings);
+  const layerCells: Array<Array<string | null>> = [];
+  const occupiedCellsByLayer = [];
+
+  for (let layerIndex = 0; layerIndex < layerCount; layerIndex += 1) {
+    layerCells.push(sliceLayer(triangles, layerIndex, sliceSettings));
+  }
+
+  const supportResult = applyModelSupports(layerCells, sliceSettings);
   const layers = [];
 
   for (let layerIndex = 0; layerIndex < layerCount; layerIndex += 1) {
-    const cells = sliceLayer(triangles, layerIndex, sliceSettings);
-    if (cells.some(Boolean)) {
+    const cells = layerCells[layerIndex];
+    if (!cells) continue;
+    const occupiedCells = cells.filter(Boolean).length;
+    occupiedCellsByLayer.push({ index: layerIndex, occupiedCells });
+    if (occupiedCells > 0) {
+      const supportCells = supportResult.supportCells[layerIndex];
       layers.push({
         index: layerIndex,
         name: `Layer ${layerIndex + 1}`,
         cells,
+        supportCells: supportCells?.some(Boolean) ? supportCells : undefined,
       });
     }
   }
@@ -136,7 +153,7 @@ export async function modelFileToLayeredPattern(file: File, settings: ModelSlice
     sourceModel: {
       fileName: file.name,
       fileType,
-      scale: getScale(rawTriangles, sliceSettings),
+      scale: scaleDetails.scale,
       layerHeightMm: sliceSettings.beadHeightMm,
       beadPitchMm: sliceSettings.beadPitchMm,
       beadHeightMm: sliceSettings.beadHeightMm,
@@ -145,6 +162,19 @@ export async function modelFileToLayeredPattern(file: File, settings: ModelSlice
     },
     layers,
     palette: parsedModel.palette,
+    support: supportResult.summary,
+    diagnostics: {
+      originalBounds: serializeBoundsSummary(originalBounds),
+      orientedBounds: serializeBoundsSummary(orientedBounds),
+      scaledSizeMm: serializeVector(scaleDetails.scaledSize),
+      scale: scaleDetails.scale,
+      naturalLayerCount: scaleDetails.naturalLayerCount,
+      targetLayerCount: sliceSettings.targetLayers,
+      generatedLayerCount: layerCount,
+      nonEmptyLayerCount: layers.length,
+      emptyLayerCount: Math.max(0, layerCount - layers.length),
+      occupiedCellsByLayer,
+    },
   };
 }
 
@@ -157,6 +187,14 @@ function normalizeModelSliceSettings(settings: ModelSliceSettings): ModelSliceSe
     beadHeightMm: clampPositive(settings.beadHeightMm, 3),
     targetLayers: Math.max(0, Math.round(settings.targetLayers)),
     orientation: normalizeModelOrientation(settings.orientation),
+    support: normalizeModelSupportSettings(settings.support),
+  };
+}
+
+function normalizeModelSupportSettings(settings: ModelSupportSettings | undefined): ModelSupportSettings {
+  return {
+    enabled: Boolean(settings?.enabled),
+    colorId: typeof settings?.colorId === "string" && settings.colorId ? settings.colorId : "bambu-pla-basic-jade-white",
   };
 }
 
@@ -182,6 +220,14 @@ function serializeBounds(bounds: THREE.Box3): ModelPreviewData["bounds"] {
   return {
     min: serializeVector(bounds.min),
     max: serializeVector(bounds.max),
+  };
+}
+
+function serializeBoundsSummary(bounds: THREE.Box3): ModelBoundsSummary {
+  return {
+    min: serializeVector(bounds.min),
+    max: serializeVector(bounds.max),
+    size: serializeVector(bounds.getSize(new THREE.Vector3())),
   };
 }
 
@@ -758,16 +804,27 @@ function normalizeTriangles(triangles: Triangle[], settings: ModelSliceSettings)
 }
 
 function getScale(triangles: Triangle[], settings: ModelSliceSettings): number {
+  return getScaleDetails(triangles, settings).scale;
+}
+
+function getScaleDetails(triangles: Triangle[], settings: ModelSliceSettings) {
   const bounds = getBounds(triangles);
   const size = new THREE.Vector3().subVectors(bounds.max, bounds.min);
   const scaleX = size.x > EPSILON ? (settings.width * settings.beadPitchMm) / size.x : Number.POSITIVE_INFINITY;
   const scaleY = size.y > EPSILON ? (settings.height * settings.beadPitchMm) / size.y : Number.POSITIVE_INFINITY;
   const baseScale = Math.min(scaleX, scaleY);
-  const defaultLayerSpan = size.z > EPSILON ? (size.z * baseScale) / settings.beadHeightMm : 0;
+  const normalizedBaseScale = Number.isFinite(baseScale) && baseScale > EPSILON ? baseScale : 1;
+  const naturalLayerCount = getLayerCountForScale(size.z, normalizedBaseScale, settings.beadHeightMm);
+  const defaultLayerSpan = size.z > EPSILON ? (size.z * normalizedBaseScale) / settings.beadHeightMm : 0;
   const scale = settings.targetLayers > 0 && defaultLayerSpan > EPSILON
-    ? baseScale * (settings.targetLayers / defaultLayerSpan)
-    : baseScale;
-  return Number.isFinite(scale) && scale > EPSILON ? scale : 1;
+    ? normalizedBaseScale * (settings.targetLayers / defaultLayerSpan)
+    : normalizedBaseScale;
+  const normalizedScale = Number.isFinite(scale) && scale > EPSILON ? scale : 1;
+  return {
+    scale: normalizedScale,
+    naturalLayerCount,
+    scaledSize: size.clone().multiplyScalar(normalizedScale),
+  };
 }
 
 function getBounds(triangles: Triangle[]): THREE.Box3 {
@@ -830,6 +887,54 @@ function sliceLayer(triangles: Triangle[], layerIndex: number, settings: ModelSl
   }
 
   return cells;
+}
+
+function applyModelSupports(layerCells: Array<Array<string | null>>, settings: ModelSliceSettings) {
+  const supportCells = layerCells.map((cells) => new Array<boolean>(cells.length).fill(false));
+  const support = settings.support;
+
+  if (!support?.enabled) {
+    return {
+      supportCells,
+      summary: undefined,
+    };
+  }
+
+  const cellsByLayer = new Map<number, number>();
+  let generatedCells = 0;
+
+  for (let layerIndex = 1; layerIndex < layerCells.length; layerIndex += 1) {
+    const layer = layerCells[layerIndex];
+    if (!layer) continue;
+
+    for (let cellIndex = 0; cellIndex < layer.length; cellIndex += 1) {
+      if (!layer[cellIndex]) continue;
+
+      for (let lowerLayerIndex = layerIndex - 1; lowerLayerIndex >= 0; lowerLayerIndex -= 1) {
+        const lowerLayer = layerCells[lowerLayerIndex];
+        const lowerSupportCells = supportCells[lowerLayerIndex];
+        if (!lowerLayer || !lowerSupportCells) continue;
+        if (lowerLayer[cellIndex]) break;
+
+        lowerLayer[cellIndex] = support.colorId;
+        lowerSupportCells[cellIndex] = true;
+        generatedCells += 1;
+        cellsByLayer.set(lowerLayerIndex, (cellsByLayer.get(lowerLayerIndex) ?? 0) + 1);
+      }
+    }
+  }
+
+  return {
+    supportCells,
+    summary: {
+      enabled: true,
+      colorId: support.colorId,
+      generatedCells,
+      cellsByLayer: [...cellsByLayer.entries()]
+        .map(([index, occupiedCells]) => ({ index, occupiedCells }))
+        .sort((a, b) => a.index - b.index),
+    },
+  };
 }
 
 function intersectTriangleAtZ(triangle: Triangle, z: number): SliceSegment | null {

@@ -271,15 +271,6 @@ button:focus-visible {
   background: #f8fafc;
 }
 
-.draggable-preview {
-  cursor: grab;
-  touch-action: none;
-}
-
-.draggable-preview:active {
-  cursor: grabbing;
-}
-
 .model-preview-canvas {
   width: 100%;
   height: 100%;
@@ -309,6 +300,18 @@ button:focus-visible {
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.preview-tool-brush .pattern-canvas {
+  cursor: cell;
+}
+
+.preview-tool-eraser .pattern-canvas {
+  cursor: crosshair;
+}
+
+.preview-tool-inspect .pattern-canvas {
+  cursor: crosshair;
 }
 
 .zoom-actions {
@@ -448,6 +451,10 @@ button:focus-visible {
   accent-color: #0f766e;
 }
 
+.compact-toggle {
+  margin-bottom: 8px;
+}
+
 .inspect-box {
   display: grid;
   gap: 3px;
@@ -551,6 +558,33 @@ button:focus-visible {
   margin: 2px 0 12px;
 }
 
+.support-panel {
+  display: grid;
+  gap: 4px;
+  margin: 2px 0 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.support-panel .field {
+  margin-bottom: 8px;
+}
+
+.support-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #475467;
+  font-size: 13px;
+}
+
+.support-summary strong {
+  color: #182230;
+}
+
 .axis-button-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -580,6 +614,52 @@ button:focus-visible {
   max-height: 220px;
   margin-top: 12px;
   overflow: auto;
+}
+
+.slice-diagnostics {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.slice-diagnostics h3 {
+  margin: 0;
+  color: #182230;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.diagnostic-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.diagnostic-item span {
+  overflow: hidden;
+  color: #667085;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-item strong {
+  overflow: hidden;
+  color: #182230;
+  font-size: 13px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .segmented-control {

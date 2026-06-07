@@ -32,6 +32,7 @@ export function renderPatternToCanvas(pattern: Pattern, cellSize = 24, showGrid 
     for (let x = 0; x < pattern.width; x += 1) {
       const cell = pattern.cells[y * pattern.width + x];
       const isBackground = isPatternBackgroundCell(pattern, y * pattern.width + x);
+      const isSupport = pattern.supportCells?.[y * pattern.width + x] === true;
       const color = cell ? colorById.get(cell) : null;
       const left = margin + x * cellSize;
       const top = margin + y * cellSize;
@@ -41,6 +42,14 @@ export function renderPatternToCanvas(pattern: Pattern, cellSize = 24, showGrid 
       if (!color || isBackground) {
         context.fillStyle = "#f3f4f6";
         context.fillRect(left + 3, top + 3, cellSize - 6, cellSize - 6);
+      }
+
+      if (isSupport && !isBackground) {
+        context.fillStyle = "rgba(24, 34, 48, 0.84)";
+        context.font = `${Math.max(10, Math.round(cellSize * 0.42))}px Arial, sans-serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText("S", left + cellSize / 2, top + cellSize / 2);
       }
     }
   }
@@ -108,12 +117,35 @@ export function downloadLayeredColorsJson(layeredPattern: LayeredPattern): void 
   const colorPlan = {
     version: 1,
     sourceModel: layeredPattern.sourceModel,
+    support: layeredPattern.support ?? {
+      enabled: false,
+      colorId: null,
+      generatedCells: 0,
+      cellsByLayer: [],
+    },
     palette: layeredPattern.palette,
-    assignments: layeredPattern.layers.map((layer) => ({
-      targetType: "layer",
-      targetId: String(layer.index),
-      colors: [...new Set(layer.cells.filter(Boolean))],
-    })),
+    assignments: layeredPattern.layers.map((layer) => {
+      const modelColorIds = new Set<string>();
+      const supportColorIds = new Set<string>();
+
+      for (let index = 0; index < layer.cells.length; index += 1) {
+        const colorId = layer.cells[index];
+        if (!colorId) continue;
+        if (layer.supportCells?.[index]) {
+          supportColorIds.add(colorId);
+        } else {
+          modelColorIds.add(colorId);
+        }
+      }
+
+      return {
+        targetType: "layer",
+        targetId: String(layer.index),
+        colors: [...modelColorIds],
+        supportColors: [...supportColorIds],
+        supportCellCount: layer.supportCells?.filter(Boolean).length ?? 0,
+      };
+    }),
     usage,
   };
   const blob = new Blob([JSON.stringify(colorPlan, null, 2)], { type: "application/json" });
@@ -134,22 +166,38 @@ function downloadBlob(blob: Blob, fileName: string): void {
 }
 
 function getLayeredUsage(layeredPattern: LayeredPattern) {
-  const counts = new Map<string, { beadCount: number; layers: Set<number> }>();
+  const counts = new Map<string, { beadCount: number; modelBeadCount: number; supportBeadCount: number; layers: Set<number>; supportLayers: Set<number> }>();
 
   for (const layer of layeredPattern.layers) {
-    for (const cell of layer.cells) {
-      if (!cell) continue;
-      const current = counts.get(cell) ?? { beadCount: 0, layers: new Set<number>() };
+    for (let index = 0; index < layer.cells.length; index += 1) {
+      const colorId = layer.cells[index];
+      if (!colorId) continue;
+      const current = counts.get(colorId) ?? {
+        beadCount: 0,
+        modelBeadCount: 0,
+        supportBeadCount: 0,
+        layers: new Set<number>(),
+        supportLayers: new Set<number>(),
+      };
       current.beadCount += 1;
+      if (layer.supportCells?.[index]) {
+        current.supportBeadCount += 1;
+        current.supportLayers.add(layer.index);
+      } else {
+        current.modelBeadCount += 1;
+      }
       current.layers.add(layer.index);
-      counts.set(cell, current);
+      counts.set(colorId, current);
     }
   }
 
   return [...counts.entries()].map(([colorId, value]) => ({
     colorId,
     beadCount: value.beadCount,
+    modelBeadCount: value.modelBeadCount,
+    supportBeadCount: value.supportBeadCount,
     layers: [...value.layers].sort((a, b) => a - b),
+    supportLayers: [...value.supportLayers].sort((a, b) => a - b),
   }));
 }
 

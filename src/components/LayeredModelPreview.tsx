@@ -6,17 +6,27 @@ import type { LayeredPattern } from "../types";
 type LayeredModelPreviewProps = {
   layeredPattern: LayeredPattern | null;
   activeLayerIndex: number;
+  showSupports: boolean;
+};
+
+type PreviewViewState = {
+  key: string;
+  position: [number, number, number];
+  target: [number, number, number];
+  zoom: number;
 };
 
 const MAX_PREVIEW_BLOCKS = 70000;
 
-export function LayeredModelPreview({ layeredPattern, activeLayerIndex }: LayeredModelPreviewProps) {
+export function LayeredModelPreview({ layeredPattern, activeLayerIndex, showSupports }: LayeredModelPreviewProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const viewStateRef = useRef<PreviewViewState | null>(null);
 
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount || !layeredPattern) return undefined;
 
+    const viewKey = getPreviewViewKey(layeredPattern);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setClearColor(0xf8fafc, 1);
@@ -34,7 +44,7 @@ export function LayeredModelPreview({ layeredPattern, activeLayerIndex }: Layere
     keyLight.position.set(18, 28, 16);
     scene.add(keyLight);
 
-    const group = buildLayerGroup(layeredPattern, activeLayerIndex);
+    const group = buildLayerGroup(layeredPattern, activeLayerIndex, showSupports);
     scene.add(group);
 
     const bounds = new THREE.Box3().setFromObject(group);
@@ -44,8 +54,17 @@ export function LayeredModelPreview({ layeredPattern, activeLayerIndex }: Layere
     camera.position.set(center.x + radius * 0.9, center.y + radius * 0.7, center.z + radius * 1.1);
     camera.near = Math.max(0.1, radius / 200);
     camera.far = radius * 8;
-    camera.updateProjectionMatrix();
     controls.target.copy(center);
+
+    const previousViewState = viewStateRef.current;
+    if (previousViewState?.key === viewKey) {
+      camera.position.fromArray(previousViewState.position);
+      camera.zoom = previousViewState.zoom;
+      controls.target.fromArray(previousViewState.target);
+    }
+
+    camera.updateProjectionMatrix();
+    camera.lookAt(controls.target);
 
     const resize = () => {
       const rect = mount.getBoundingClientRect();
@@ -69,6 +88,12 @@ export function LayeredModelPreview({ layeredPattern, activeLayerIndex }: Layere
     render();
 
     return () => {
+      viewStateRef.current = {
+        key: viewKey,
+        position: vectorToTuple(camera.position),
+        target: vectorToTuple(controls.target),
+        zoom: camera.zoom,
+      };
       window.cancelAnimationFrame(animationFrame);
       observer.disconnect();
       controls.dispose();
@@ -81,12 +106,26 @@ export function LayeredModelPreview({ layeredPattern, activeLayerIndex }: Layere
       renderer.dispose();
       mount.replaceChildren();
     };
-  }, [activeLayerIndex, layeredPattern]);
+  }, [activeLayerIndex, layeredPattern, showSupports]);
 
   return <div aria-label="整体模型预览" className="model-preview-canvas" ref={mountRef} />;
 }
 
-function buildLayerGroup(layeredPattern: LayeredPattern, activeLayerIndex: number) {
+function getPreviewViewKey(layeredPattern: LayeredPattern): string {
+  return [
+    layeredPattern.sourceModel?.fileName ?? "layered-pattern",
+    layeredPattern.width,
+    layeredPattern.height,
+    layeredPattern.layers.length,
+    layeredPattern.sourceModel?.scale ?? 1,
+  ].join(":");
+}
+
+function vectorToTuple(vector: THREE.Vector3): [number, number, number] {
+  return [vector.x, vector.y, vector.z];
+}
+
+function buildLayerGroup(layeredPattern: LayeredPattern, activeLayerIndex: number, showSupports: boolean) {
   const group = new THREE.Group();
   const widthOffset = (layeredPattern.width - 1) / 2;
   const heightOffset = (layeredPattern.height - 1) / 2;
@@ -102,6 +141,7 @@ function buildLayerGroup(layeredPattern: LayeredPattern, activeLayerIndex: numbe
     for (let index = 0; index < layer.cells.length; index += 1) {
       const colorId = layer.cells[index];
       if (!colorId) continue;
+      if (!showSupports && layer.supportCells?.[index]) continue;
       totalBlocks += 1;
     }
   }
@@ -116,6 +156,7 @@ function buildLayerGroup(layeredPattern: LayeredPattern, activeLayerIndex: numbe
     for (let index = 0; index < layer.cells.length; index += 1) {
       const colorId = layer.cells[index];
       if (!colorId) continue;
+      if (!showSupports && layer.supportCells?.[index]) continue;
       seen += 1;
       if (seen % stride !== 0) continue;
 

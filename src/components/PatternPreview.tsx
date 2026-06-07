@@ -6,10 +6,11 @@ type PatternPreviewProps = {
   pattern: Pattern | null;
   selectedColorId: string | null;
   zoom: number;
+  interactionMode: "brush" | "eraser" | "inspect";
   onCellClick: (x: number, y: number) => void;
 };
 
-export function PatternPreview({ pattern, selectedColorId, zoom, onCellClick }: PatternPreviewProps) {
+export function PatternPreview({ pattern, selectedColorId, zoom, interactionMode, onCellClick }: PatternPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef({
@@ -58,7 +59,9 @@ export function PatternPreview({ pattern, selectedColorId, zoom, onCellClick }: 
       for (let y = 0; y < pattern.height; y += 1) {
         for (let x = 0; x < pattern.width; x += 1) {
           const cell = pattern.cells[y * pattern.width + x];
+          const index = y * pattern.width + x;
           const isBackground = isPatternBackgroundCell(pattern, y * pattern.width + x);
+          const isSupport = pattern.supportCells?.[index] === true;
           const color = cell ? colorById.get(cell) : null;
           const isSelected = Boolean(selectedColorId && cell === selectedColorId && !isBackground);
           const isDimmed = Boolean(selectedColorId && !isSelected);
@@ -82,6 +85,14 @@ export function PatternPreview({ pattern, selectedColorId, zoom, onCellClick }: 
           if (isDimmed) {
             context.fillStyle = "rgba(15, 23, 42, 0.58)";
             context.fillRect(left, top, cellSize, cellSize);
+          }
+
+          if (isSupport && !isBackground && cellSize >= 12) {
+            context.fillStyle = "rgba(24, 34, 48, 0.86)";
+            context.font = `${Math.max(9, Math.round(cellSize * 0.34))}px Arial, sans-serif`;
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            context.fillText("S", left + cellSize / 2, top + cellSize / 2);
           }
 
           context.strokeStyle = color && !isBackground ? "rgba(0, 0, 0, 0.14)" : "rgba(0, 0, 0, 0.08)";
@@ -144,7 +155,9 @@ export function PatternPreview({ pattern, selectedColorId, zoom, onCellClick }: 
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const wrapper = wrapperRef.current;
+    const canvas = canvasRef.current;
     if (!wrapper || event.button !== 0) return;
+    if (event.target === canvas && !event.altKey) return;
 
     dragStateRef.current = {
       isPointerDown: true,
@@ -189,7 +202,7 @@ export function PatternPreview({ pattern, selectedColorId, zoom, onCellClick }: 
 
   return (
     <div
-      className="preview-shell draggable-preview"
+      className={`preview-shell preview-tool-${interactionMode}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

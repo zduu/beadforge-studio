@@ -45,6 +45,42 @@ export type ModelPreviewData = {
   triangles: ModelPreviewTriangle[];
 };
 
+export type ModelBoundsSummary = {
+  min: [number, number, number];
+  max: [number, number, number];
+  size: [number, number, number];
+};
+
+export type ModelLayerOccupancy = {
+  index: number;
+  occupiedCells: number;
+};
+
+export type ModelSliceDiagnostics = {
+  originalBounds: ModelBoundsSummary;
+  orientedBounds: ModelBoundsSummary;
+  scaledSizeMm: [number, number, number];
+  scale: number;
+  naturalLayerCount: number;
+  targetLayerCount: number;
+  generatedLayerCount: number;
+  nonEmptyLayerCount: number;
+  emptyLayerCount: number;
+  occupiedCellsByLayer: ModelLayerOccupancy[];
+};
+
+export type ModelSupportSettings = {
+  enabled: boolean;
+  colorId: string;
+};
+
+export type ModelSupportSummary = {
+  enabled: boolean;
+  colorId: string;
+  generatedCells: number;
+  cellsByLayer: ModelLayerOccupancy[];
+};
+
 export type PatternSettings = {
   width: number;
   height: number;
@@ -65,6 +101,7 @@ export type Pattern = {
   cells: Array<string | null>;
   backgroundColorId?: string | null;
   backgroundCells?: boolean[];
+  supportCells?: boolean[];
   settings: PatternSettings;
   source?: {
     fileName: string;
@@ -92,8 +129,11 @@ export type LayeredPattern = {
     index: number;
     name: string;
     cells: Array<string | null>;
+    supportCells?: boolean[];
   }>;
   palette: BeadColor[];
+  diagnostics?: ModelSliceDiagnostics;
+  support?: ModelSupportSummary;
 };
 
 export type ColorUsage = {

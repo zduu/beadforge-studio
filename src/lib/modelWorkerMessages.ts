@@ -1,4 +1,4 @@
-import type { LayeredPattern, ModelOrientation, ModelPreviewData } from "../types";
+import type { LayeredPattern, ModelOrientation, ModelPreviewData, ModelSupportSettings } from "../types";
 
 export type ModelWorkerSliceSettings = {
   width: number;
@@ -8,6 +8,7 @@ export type ModelWorkerSliceSettings = {
   targetLayers: number;
   colorId: string;
   orientation: ModelOrientation;
+  support: ModelSupportSettings;
 };
 
 export type ModelWorkerRequest =

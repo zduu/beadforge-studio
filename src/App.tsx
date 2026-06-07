@@ -28,10 +28,10 @@ import {
   downloadUsageCsv,
 } from "./lib/export";
 import { imageFileToPattern } from "./lib/imageToPattern";
-import { layeredPatternToPattern } from "./lib/layeredPattern";
+import { layeredPatternToPattern, validateLayeredPattern } from "./lib/layeredPattern";
 import type { ModelWorkerJobRequest, ModelWorkerRequest, ModelWorkerResponse } from "./lib/modelWorkerMessages";
 import { cropPatternToRect, getAllPatternColors, getColorUsage, isPatternBackgroundCell, replacePatternColor, setPatternBackground, setPatternCell, validatePattern } from "./lib/pattern";
-import type { ColorUsage, CropRect, FitMode, LayeredPattern, Pattern, PatternSettings, SampleMode } from "./types";
+import type { ColorUsage, CropRect, FitMode, LayeredPattern, ModelSupportSettings, Pattern, PatternSettings, SampleMode } from "./types";
 import type { ModelOrientation, ModelPreviewData } from "./types";
 
 const DEFAULT_SETTINGS: PatternSettings = {
@@ -49,6 +49,16 @@ const DEFAULT_MODEL_SLICE_SETTINGS = {
   beadPitchMm: 2.6,
   beadHeightMm: 3,
   targetLayers: 0,
+};
+
+type ModelSupportUiSettings = ModelSupportSettings & {
+  showSupports: boolean;
+};
+
+const DEFAULT_MODEL_SUPPORT_SETTINGS: ModelSupportUiSettings = {
+  enabled: true,
+  showSupports: true,
+  colorId: "bambu-pla-basic-jade-white",
 };
 
 const DEFAULT_MODEL_ORIENTATION: ModelOrientation = {
@@ -76,6 +86,7 @@ type UndoSnapshot = {
   pattern: Pattern;
   settings: PatternSettings;
   backgroundColorId: string | null;
+  layeredPattern: LayeredPattern | null;
 };
 
 const DEFAULT_BACKGROUND_COLOR_ID = "bambu-pla-basic-jade-white";
@@ -107,6 +118,7 @@ function App() {
   const [inspectInfo, setInspectInfo] = useState<InspectInfo | null>(null);
   const [modelColorId, setModelColorId] = useState<string>(bambuPlaBasicColors[1].id);
   const [modelSliceSettings, setModelSliceSettings] = useState(DEFAULT_MODEL_SLICE_SETTINGS);
+  const [modelSupportSettings, setModelSupportSettings] = useState(DEFAULT_MODEL_SUPPORT_SETTINGS);
   const [modelSliceDrafts, setModelSliceDrafts] = useState({
     beadPitchMm: String(DEFAULT_MODEL_SLICE_SETTINGS.beadPitchMm),
     beadHeightMm: String(DEFAULT_MODEL_SLICE_SETTINGS.beadHeightMm),
@@ -127,10 +139,10 @@ function App() {
 
   const usage = useMemo(() => {
     if (layeredPattern && previewMode === "model") {
-      return getLayeredColorUsage(layeredPattern);
+      return getLayeredColorUsage(layeredPattern, modelSupportSettings.showSupports);
     }
     return pattern ? getColorUsage(pattern) : [];
-  }, [layeredPattern, pattern, previewMode]);
+  }, [layeredPattern, modelSupportSettings.showSupports, pattern, previewMode]);
   const allPatternColors = useMemo(() => (pattern ? getAllPatternColors(pattern) : []), [pattern]);
   const totalBeads = useMemo(() => usage.reduce((sum, item) => sum + item.count, 0), [usage]);
 
@@ -255,29 +267,68 @@ function App() {
     try {
       const json = JSON.parse(await file.text()) as unknown;
       const imported = validatePattern(json);
-      if (!imported) {
-        setStatus("项目文件无效");
+      if (imported) {
+        const normalizedImported = {
+          ...imported,
+          backgroundCells: imported.backgroundCells?.length === imported.cells.length ? imported.backgroundCells : undefined,
+          settings: normalizeSettings({ ...DEFAULT_SETTINGS, ...imported.settings }),
+        };
+        setPattern(normalizedImported);
+        setUndoStack([]);
+        setBackgroundColorId(normalizedImported.backgroundColorId ?? backgroundColorId);
+        setLayeredPattern(null);
+        setModelSourceFile(null);
+        setModelPreviewData(null);
+        setModelOrientation(DEFAULT_MODEL_ORIENTATION);
+        setActiveLayerIndex(0);
+        setPreviewMode("layer");
+        setSettings(normalizedImported.settings);
+        setSourceFile(null);
+        setPreviewCropRect(null);
+        setSelectedColorId(null);
+        setStatus(`已导入 ${normalizedImported.width}x${normalizedImported.height} 项目`);
         return;
       }
-      const normalizedImported = {
-        ...imported,
-        backgroundCells: imported.backgroundCells?.length === imported.cells.length ? imported.backgroundCells : undefined,
-        settings: normalizeSettings({ ...DEFAULT_SETTINGS, ...imported.settings }),
-      };
-      setPattern(normalizedImported);
-      setUndoStack([]);
-      setBackgroundColorId(normalizedImported.backgroundColorId ?? backgroundColorId);
-      setLayeredPattern(null);
-      setModelSourceFile(null);
-      setModelPreviewData(null);
-      setModelOrientation(DEFAULT_MODEL_ORIENTATION);
-      setActiveLayerIndex(0);
-      setPreviewMode("layer");
-      setSettings(normalizedImported.settings);
-      setSourceFile(null);
-      setPreviewCropRect(null);
-      setSelectedColorId(null);
-      setStatus(`已导入 ${normalizedImported.width}x${normalizedImported.height} 项目`);
+
+      const importedLayeredPattern = validateLayeredPattern(json);
+      if (importedLayeredPattern) {
+        const nextShowSupports = importedLayeredPattern.support?.enabled ?? DEFAULT_MODEL_SUPPORT_SETTINGS.showSupports;
+        const nextSettings = normalizeSettings({
+          ...DEFAULT_SETTINGS,
+          width: importedLayeredPattern.width,
+          height: importedLayeredPattern.height,
+          maxColors: importedLayeredPattern.palette.length,
+        });
+        const nextModelSliceSettings = normalizeModelSliceSettings({
+          beadPitchMm: importedLayeredPattern.sourceModel?.beadPitchMm ?? DEFAULT_MODEL_SLICE_SETTINGS.beadPitchMm,
+          beadHeightMm: importedLayeredPattern.sourceModel?.beadHeightMm ?? importedLayeredPattern.sourceModel?.layerHeightMm ?? DEFAULT_MODEL_SLICE_SETTINGS.beadHeightMm,
+          targetLayers: importedLayeredPattern.sourceModel?.targetLayers ?? DEFAULT_MODEL_SLICE_SETTINGS.targetLayers,
+        });
+
+        setLayeredPattern(importedLayeredPattern);
+        setPattern(applyPatternBackground(layeredPatternToPattern(importedLayeredPattern, 0, { includeSupports: nextShowSupports }), null));
+        setUndoStack([]);
+        setBackgroundColorId(null);
+        setModelSourceFile(null);
+        setModelPreviewData(null);
+        setModelOrientation(importedLayeredPattern.sourceModel?.orientation ?? DEFAULT_MODEL_ORIENTATION);
+        setModelSliceSettings(nextModelSliceSettings);
+        setModelSupportSettings({
+          enabled: importedLayeredPattern.support?.enabled ?? DEFAULT_MODEL_SUPPORT_SETTINGS.enabled,
+          showSupports: nextShowSupports,
+          colorId: importedLayeredPattern.support?.colorId ?? DEFAULT_MODEL_SUPPORT_SETTINGS.colorId,
+        });
+        setActiveLayerIndex(0);
+        setPreviewMode("layer");
+        setSettings(nextSettings);
+        setSourceFile(null);
+        setPreviewCropRect(null);
+        setSelectedColorId(null);
+        setStatus(`已导入 ${importedLayeredPattern.width}x${importedLayeredPattern.height} · ${importedLayeredPattern.layers.length} 层项目`);
+        return;
+      }
+
+      setStatus("项目文件无效");
     } catch {
       setStatus("无法读取项目文件");
     } finally {
@@ -288,7 +339,11 @@ function App() {
   const handleReplaceColor = (toId: string) => {
     if (!pattern || !selectedColorId || selectedColorId === toId) return;
     pushUndoSnapshot();
-    setPattern(replacePatternColor(pattern, selectedColorId, toId));
+    const nextPattern = replacePatternColor(pattern, selectedColorId, toId);
+    setPattern(nextPattern);
+    if (layeredPattern && previewMode === "layer") {
+      setLayeredPattern(syncLayeredPatternFromPattern(layeredPattern, activeLayerIndex, nextPattern, modelSupportSettings.showSupports));
+    }
     setSelectedColorId(toId);
     setStatus("颜色已替换");
   };
@@ -299,6 +354,7 @@ function App() {
       pattern: clonePattern(pattern),
       settings: cloneSettings(settings),
       backgroundColorId,
+      layeredPattern: layeredPattern ? cloneLayeredPattern(layeredPattern) : null,
     };
     setUndoStack((stack) => [...stack.slice(-(MAX_UNDO_STEPS - 1)), snapshot]);
   };
@@ -310,6 +366,7 @@ function App() {
       setPattern(clonePattern(snapshot.pattern));
       setSettings(cloneSettings(snapshot.settings));
       setBackgroundColorId(snapshot.backgroundColorId);
+      setLayeredPattern(snapshot.layeredPattern ? cloneLayeredPattern(snapshot.layeredPattern) : null);
       setPreviewCropRect(null);
       setStatus("已回退");
       return stack.slice(0, -1);
@@ -386,8 +443,10 @@ function App() {
     const color = cell ? pattern.palette.find((item) => item.id === cell) : null;
 
     if (editTool === "inspect") {
-      const isBackground = isPatternBackgroundCell(pattern, y * pattern.width + x);
-      const colorName = isBackground ? "背景" : color?.nameZh ?? "空白";
+      const index = y * pattern.width + x;
+      const isBackground = isPatternBackgroundCell(pattern, index);
+      const isSupport = pattern.supportCells?.[index] === true;
+      const colorName = isBackground ? "背景" : isSupport ? "支撑" : color?.nameZh ?? "空白";
       setInspectInfo({ x: x + 1, y: y + 1, colorName, colorCode: color?.code ?? "-" });
       setStatus(`坐标 ${x + 1}, ${y + 1} · ${colorName}`);
       return;
@@ -395,7 +454,11 @@ function App() {
 
     if (editTool === "eraser") {
       pushUndoSnapshot();
-      setPattern(setPatternCell(pattern, x, y, null, true));
+      const nextPattern = setPatternSupportFlag(setPatternCell(pattern, x, y, null, true), x, y, false);
+      setPattern(nextPattern);
+      if (layeredPattern && previewMode === "layer") {
+        setLayeredPattern(syncLayeredPatternFromPattern(layeredPattern, activeLayerIndex, nextPattern, modelSupportSettings.showSupports));
+      }
       setStatus(`已擦除 ${x + 1}, ${y + 1}`);
       return;
     }
@@ -405,7 +468,11 @@ function App() {
       return;
     }
     pushUndoSnapshot();
-    setPattern(setPatternCell(pattern, x, y, paintColorId));
+    const nextPattern = setPatternSupportFlag(setPatternCell(pattern, x, y, paintColorId), x, y, false);
+    setPattern(nextPattern);
+    if (layeredPattern && previewMode === "layer") {
+      setLayeredPattern(syncLayeredPatternFromPattern(layeredPattern, activeLayerIndex, nextPattern, modelSupportSettings.showSupports));
+    }
     setStatus(`已修改 ${x + 1}, ${y + 1}`);
   };
 
@@ -475,6 +542,10 @@ function App() {
             targetLayers: normalizedModelSliceSettings.targetLayers,
             colorId: modelColorId,
             orientation: modelOrientation,
+            support: {
+              enabled: modelSupportSettings.enabled,
+              colorId: modelSupportSettings.colorId,
+            },
           },
         },
         (response) => {
@@ -488,11 +559,11 @@ function App() {
       setActiveLayerIndex(0);
       setPreviewMode("model");
       setBackgroundColorId(null);
-      setPattern(applyPatternBackground(layeredPatternToPattern(nextLayeredPattern, 0), null));
+      setPattern(applyPatternBackground(layeredPatternToPattern(nextLayeredPattern, 0, { includeSupports: modelSupportSettings.showSupports }), null));
       setSourceFile(null);
       setPreviewCropRect(null);
       setSelectedColorId(null);
-      setStatus(`本机已生成 ${nextLayeredPattern.layers.length} 层模型图纸`);
+      setStatus(`本机已生成 ${nextLayeredPattern.layers.length} 层模型图纸${nextLayeredPattern.support?.generatedCells ? ` · 支撑 ${nextLayeredPattern.support.generatedCells} 格` : ""}`);
     } catch (error) {
       if (isModelJobCancelled(error)) return;
       setStatus(error instanceof Error ? error.message : "模型切片失败");
@@ -551,7 +622,7 @@ function App() {
   const selectLayer = (layerIndex: number) => {
     if (!layeredPattern) return;
     setActiveLayerIndex(layerIndex);
-    setPattern(applyPatternBackground(layeredPatternToPattern(layeredPattern, layerIndex), backgroundColorId));
+    setPattern(applyPatternBackground(layeredPatternToPattern(layeredPattern, layerIndex, { includeSupports: modelSupportSettings.showSupports }), backgroundColorId));
     setUndoStack([]);
     setPreviewCropRect(null);
     setSelectedColorId(null);
@@ -564,7 +635,7 @@ function App() {
     if (layeredPattern && previewMode === "layer") {
       const nextLayeredPattern = rotateLayeredPatternClockwise(layeredPattern);
       setLayeredPattern(nextLayeredPattern);
-      setPattern(applyPatternBackground(layeredPatternToPattern(nextLayeredPattern, activeLayerIndex), backgroundColorId));
+      setPattern(applyPatternBackground(layeredPatternToPattern(nextLayeredPattern, activeLayerIndex, { includeSupports: modelSupportSettings.showSupports }), backgroundColorId));
       setUndoStack([]);
       setPreviewCropRect(null);
       setSelectedColorId(null);
@@ -596,6 +667,19 @@ function App() {
     setStatus("模型方向已重置");
   };
 
+  const updateModelSupportSettings = (partial: Partial<typeof DEFAULT_MODEL_SUPPORT_SETTINGS>) => {
+    setModelSupportSettings((currentSettings) => {
+      const nextSettings = { ...currentSettings, ...partial };
+      if (layeredPattern && partial.showSupports !== undefined) {
+        setPattern(applyPatternBackground(layeredPatternToPattern(layeredPattern, activeLayerIndex, { includeSupports: nextSettings.showSupports }), backgroundColorId));
+        setStatus(nextSettings.showSupports ? "已显示支撑" : "已隐藏支撑");
+      } else if (partial.enabled !== undefined || partial.colorId !== undefined) {
+        setStatus("支撑设置已调整，重新切片后生效");
+      }
+      return nextSettings;
+    });
+  };
+
   const cancelModelJob = () => {
     const reject = modelJobRejectRef.current;
     modelWorkerRef.current?.terminate();
@@ -609,6 +693,7 @@ function App() {
 
   const isSourceModelPreview = Boolean(modelPreviewData && previewMode === "source-model");
   const isLayeredModelPreview = Boolean(layeredPattern && previewMode === "model");
+  const modelDiagnostics = layeredPattern?.diagnostics;
 
   return (
     <main className="app-shell">
@@ -814,6 +899,42 @@ function App() {
                 ))}
               </select>
             </label>
+            <div className="support-panel">
+              <label className="toggle-field compact-toggle">
+                <input
+                  checked={modelSupportSettings.enabled}
+                  onChange={(event) => updateModelSupportSettings({ enabled: event.target.checked })}
+                  type="checkbox"
+                />
+                <span>自动补支撑</span>
+              </label>
+              <label className="field compact-field">
+                <span>支撑耗材</span>
+                <select
+                  disabled={!modelSupportSettings.enabled}
+                  value={modelSupportSettings.colorId}
+                  onChange={(event) => updateModelSupportSettings({ colorId: event.target.value })}
+                >
+                  {bambuPlaBasicColors.map((color) => (
+                    <option key={color.id} value={color.id}>{color.nameZh} · {color.code}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="toggle-field compact-toggle">
+                <input
+                  checked={modelSupportSettings.showSupports}
+                  onChange={(event) => updateModelSupportSettings({ showSupports: event.target.checked })}
+                  type="checkbox"
+                />
+                <span>显示支撑</span>
+              </label>
+              {layeredPattern?.support && (
+                <div className="support-summary">
+                  <span>支撑格</span>
+                  <strong>{layeredPattern.support.generatedCells}</strong>
+                </div>
+              )}
+            </div>
             <div className="model-orientation-panel">
               <div className="metric-row">
                 <span>模型方向</span>
@@ -862,9 +983,48 @@ function App() {
                     type="button"
                   >
                     <span>{index + 1}</span>
-                    <strong>{layer.cells.filter(Boolean).length}</strong>
+                    <strong>{getLayerCellCount(layer, modelSupportSettings.showSupports)}</strong>
                   </button>
                 ))}
+              </div>
+            )}
+            {modelDiagnostics && (
+              <div className="slice-diagnostics">
+                <h3>切片信息</h3>
+                <div className="diagnostic-grid">
+                  <div className="diagnostic-item">
+                    <span>原始尺寸 mm</span>
+                    <strong>{formatModelVector(modelDiagnostics.originalBounds.size)}</strong>
+                  </div>
+                  <div className="diagnostic-item">
+                    <span>旋转后 mm</span>
+                    <strong>{formatModelVector(modelDiagnostics.orientedBounds.size)}</strong>
+                  </div>
+                  <div className="diagnostic-item">
+                    <span>缩放后 mm</span>
+                    <strong>{formatModelVector(modelDiagnostics.scaledSizeMm)}</strong>
+                  </div>
+                  <div className="diagnostic-item">
+                    <span>缩放</span>
+                    <strong>{formatModelNumber(modelDiagnostics.scale)}x</strong>
+                  </div>
+                  <div className="diagnostic-item">
+                    <span>层数</span>
+                    <strong>{modelDiagnostics.nonEmptyLayerCount} / {modelDiagnostics.generatedLayerCount}</strong>
+                  </div>
+                  <div className="diagnostic-item">
+                    <span>当前层</span>
+                    <strong>{getLayerOccupiedCells(modelDiagnostics, layeredPattern.layers[activeLayerIndex]?.index ?? activeLayerIndex)}</strong>
+                  </div>
+                  <div className="diagnostic-item">
+                    <span>自然层数</span>
+                    <strong>{modelDiagnostics.naturalLayerCount}</strong>
+                  </div>
+                  <div className="diagnostic-item">
+                    <span>空层</span>
+                    <strong>{modelDiagnostics.emptyLayerCount}</strong>
+                  </div>
+                </div>
               </div>
             )}
           </details>
@@ -946,10 +1106,10 @@ function App() {
             </Suspense>
           ) : layeredPattern && previewMode === "model" ? (
             <Suspense fallback={<div className="preview-loading">加载整体模型</div>}>
-              <LayeredModelPreview layeredPattern={layeredPattern} activeLayerIndex={activeLayerIndex} />
+              <LayeredModelPreview layeredPattern={layeredPattern} activeLayerIndex={activeLayerIndex} showSupports={modelSupportSettings.showSupports} />
             </Suspense>
           ) : (
-            <PatternPreview pattern={pattern} selectedColorId={selectedColorId} zoom={previewZoom} onCellClick={handleCellClick} />
+            <PatternPreview pattern={pattern} selectedColorId={selectedColorId} zoom={previewZoom} interactionMode={editTool} onCellClick={handleCellClick} />
           )}
         </section>
 
@@ -1073,13 +1233,15 @@ function getModelSliceSettingsFromDrafts(drafts: typeof DEFAULT_MODEL_SLICE_SETT
   });
 }
 
-function getLayeredColorUsage(layeredPattern: LayeredPattern): ColorUsage[] {
+function getLayeredColorUsage(layeredPattern: LayeredPattern, includeSupports: boolean): ColorUsage[] {
   const counts = new Map<string, number>();
   const colorById = new Map(layeredPattern.palette.map((color) => [color.id, color]));
 
   for (const layer of layeredPattern.layers) {
-    for (const cell of layer.cells) {
+    for (let index = 0; index < layer.cells.length; index += 1) {
+      const cell = layer.cells[index];
       if (!cell) continue;
+      if (!includeSupports && layer.supportCells?.[index]) continue;
       counts.set(cell, (counts.get(cell) ?? 0) + 1);
     }
   }
@@ -1125,6 +1287,22 @@ function formatModelNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
 }
 
+function formatModelVector(vector: [number, number, number]): string {
+  return vector.map(formatModelNumber).join(" x ");
+}
+
+function getLayerOccupiedCells(diagnostics: LayeredPattern["diagnostics"], layerIndex: number): number {
+  return diagnostics?.occupiedCellsByLayer.find((layer) => layer.index === layerIndex)?.occupiedCells ?? 0;
+}
+
+function getLayerCellCount(layer: LayeredPattern["layers"][number], includeSupports: boolean): number {
+  return layer.cells.reduce((count, cell, index) => {
+    if (!cell) return count;
+    if (!includeSupports && layer.supportCells?.[index]) return count;
+    return count + 1;
+  }, 0);
+}
+
 function isModelJobCancelled(error: unknown): boolean {
   return error instanceof Error && error.message === MODEL_JOB_CANCELLED;
 }
@@ -1145,6 +1323,111 @@ function applyPatternBackground(pattern: Pattern, colorId: string | null): Patte
     ...pattern,
     backgroundCells,
   }, colorId);
+}
+
+function setPatternSupportFlag(pattern: Pattern, x: number, y: number, isSupport: boolean): Pattern {
+  if (x < 0 || y < 0 || x >= pattern.width || y >= pattern.height) return pattern;
+  const supportCells = pattern.supportCells?.length === pattern.cells.length
+    ? [...pattern.supportCells]
+    : new Array<boolean>(pattern.cells.length).fill(false);
+  supportCells[y * pattern.width + x] = isSupport;
+  return {
+    ...pattern,
+    supportCells: supportCells.some(Boolean) ? supportCells : undefined,
+  };
+}
+
+function syncLayeredPatternFromPattern(
+  layeredPattern: LayeredPattern,
+  activeLayerIndex: number,
+  pattern: Pattern,
+  includeSupports: boolean,
+): LayeredPattern {
+  const layer = layeredPattern.layers[activeLayerIndex];
+  if (!layer) return layeredPattern;
+
+  const cellCount = layeredPattern.width * layeredPattern.height;
+  const previousSupportCells = getNormalizedSupportCells(layer, cellCount);
+  let nextCells: Array<string | null>;
+  let nextSupportCells: boolean[];
+
+  if (includeSupports) {
+    nextCells = [...pattern.cells];
+    nextSupportCells = pattern.supportCells?.length === cellCount ? [...pattern.supportCells] : new Array<boolean>(cellCount).fill(false);
+  } else {
+    nextCells = [...layer.cells];
+    nextSupportCells = [...previousSupportCells];
+
+    for (let index = 0; index < cellCount; index += 1) {
+      if (previousSupportCells[index] && !pattern.cells[index]) continue;
+      nextCells[index] = pattern.cells[index] ?? null;
+      nextSupportCells[index] = false;
+    }
+  }
+
+  const layers = layeredPattern.layers.map((currentLayer, index) => index === activeLayerIndex
+    ? {
+        ...currentLayer,
+        cells: nextCells,
+        supportCells: nextSupportCells.some(Boolean) ? nextSupportCells : undefined,
+      }
+    : currentLayer);
+
+  return recomputeLayeredPatternMetadata({
+    ...layeredPattern,
+    layers,
+  });
+}
+
+function recomputeLayeredPatternMetadata(layeredPattern: LayeredPattern): LayeredPattern {
+  const cellsByLayer = [];
+  const supportColorIds = new Set<string>();
+  let generatedCells = 0;
+
+  for (const layer of layeredPattern.layers) {
+    const supportCells = getNormalizedSupportCells(layer, layeredPattern.width * layeredPattern.height);
+    const occupiedCells = supportCells.reduce((count, isSupport, index) => {
+      const colorId = layer.cells[index];
+      if (!isSupport || !colorId) return count;
+      supportColorIds.add(colorId);
+      return count + 1;
+    }, 0);
+    if (occupiedCells > 0) cellsByLayer.push({ index: layer.index, occupiedCells });
+    generatedCells += occupiedCells;
+  }
+
+  const supportColorId = supportColorIds.size === 1
+    ? [...supportColorIds][0]
+    : layeredPattern.support?.colorId ?? DEFAULT_MODEL_SUPPORT_SETTINGS.colorId;
+  const occupiedCellsByLayer = layeredPattern.layers.map((layer) => ({
+    index: layer.index,
+    occupiedCells: layer.cells.filter(Boolean).length,
+  }));
+  const nonEmptyLayerCount = occupiedCellsByLayer.filter((layer) => layer.occupiedCells > 0).length;
+
+  return {
+    ...layeredPattern,
+    diagnostics: layeredPattern.diagnostics
+      ? {
+          ...layeredPattern.diagnostics,
+          occupiedCellsByLayer,
+          nonEmptyLayerCount,
+          emptyLayerCount: Math.max(0, layeredPattern.diagnostics.generatedLayerCount - nonEmptyLayerCount),
+        }
+      : undefined,
+    support: layeredPattern.support || generatedCells > 0
+      ? {
+          enabled: layeredPattern.support?.enabled ?? generatedCells > 0,
+          colorId: supportColorId ?? DEFAULT_MODEL_SUPPORT_SETTINGS.colorId,
+          generatedCells,
+          cellsByLayer,
+        }
+      : undefined,
+  };
+}
+
+function getNormalizedSupportCells(layer: LayeredPattern["layers"][number], cellCount: number): boolean[] {
+  return layer.supportCells?.length === cellCount ? [...layer.supportCells] : new Array<boolean>(cellCount).fill(false);
 }
 
 function rotatePatternClockwise(pattern: Pattern): Pattern {
@@ -1176,6 +1459,7 @@ function rotateLayeredPatternClockwise(layeredPattern: LayeredPattern): LayeredP
     layers: layeredPattern.layers.map((layer) => ({
       ...layer,
       cells: rotateCellsClockwise(layer.cells, layeredPattern.width, layeredPattern.height),
+      supportCells: layer.supportCells ? rotateCellsClockwise(layer.supportCells, layeredPattern.width, layeredPattern.height) : undefined,
     })),
   };
 }
@@ -1196,9 +1480,55 @@ function clonePattern(pattern: Pattern): Pattern {
     palette: [...pattern.palette],
     cells: [...pattern.cells],
     backgroundCells: pattern.backgroundCells ? [...pattern.backgroundCells] : undefined,
+    supportCells: pattern.supportCells ? [...pattern.supportCells] : undefined,
     settings: cloneSettings(pattern.settings),
     source: pattern.source ? { ...pattern.source } : undefined,
   };
+}
+
+function cloneLayeredPattern(layeredPattern: LayeredPattern): LayeredPattern {
+  return {
+    ...layeredPattern,
+    sourceModel: layeredPattern.sourceModel
+      ? {
+          ...layeredPattern.sourceModel,
+          orientation: layeredPattern.sourceModel.orientation ? { ...layeredPattern.sourceModel.orientation } : undefined,
+        }
+      : undefined,
+    layers: layeredPattern.layers.map((layer) => ({
+      ...layer,
+      cells: [...layer.cells],
+      supportCells: layer.supportCells ? [...layer.supportCells] : undefined,
+    })),
+    palette: [...layeredPattern.palette],
+    diagnostics: layeredPattern.diagnostics
+      ? {
+          ...layeredPattern.diagnostics,
+          originalBounds: cloneBoundsSummary(layeredPattern.diagnostics.originalBounds),
+          orientedBounds: cloneBoundsSummary(layeredPattern.diagnostics.orientedBounds),
+          scaledSizeMm: cloneVector3(layeredPattern.diagnostics.scaledSizeMm),
+          occupiedCellsByLayer: layeredPattern.diagnostics.occupiedCellsByLayer.map((layer) => ({ ...layer })),
+        }
+      : undefined,
+    support: layeredPattern.support
+      ? {
+          ...layeredPattern.support,
+          cellsByLayer: layeredPattern.support.cellsByLayer.map((layer) => ({ ...layer })),
+        }
+      : undefined,
+  };
+}
+
+function cloneBoundsSummary(bounds: NonNullable<LayeredPattern["diagnostics"]>["originalBounds"]) {
+  return {
+    min: cloneVector3(bounds.min),
+    max: cloneVector3(bounds.max),
+    size: cloneVector3(bounds.size),
+  };
+}
+
+function cloneVector3(vector: [number, number, number]): [number, number, number] {
+  return [vector[0], vector[1], vector[2]];
 }
 
 function cloneSettings(settings: PatternSettings): PatternSettings {
