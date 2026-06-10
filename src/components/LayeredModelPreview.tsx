@@ -200,7 +200,12 @@ function buildLayerGroup(layeredPattern: LayeredPattern, activeLayerIndex: numbe
     group.add(mesh);
   }
 
-  const grid = new THREE.GridHelper(Math.max(layeredPattern.width, layeredPattern.height), Math.max(layeredPattern.width, layeredPattern.height), 0x94a3b8, 0xd0d5dd);
+  const grid = new THREE.GridHelper(
+    Math.max(layeredPattern.width, layeredPattern.height),
+    Math.max(layeredPattern.width, layeredPattern.height),
+    0x94a3b8,
+    0xd0d5dd,
+  );
   grid.position.y = -blockHeight / 2 - 0.04;
   group.add(grid);
 

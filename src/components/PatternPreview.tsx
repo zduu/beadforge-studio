@@ -69,7 +69,7 @@ export function PatternPreview({ pattern, selectedColorId, zoom, interactionMode
           const top = offsetY + y * cellSize;
           const displayHex = color?.hex;
 
-          context.fillStyle = isBackground ? "#ffffff" : displayHex ?? "#ffffff";
+          context.fillStyle = isBackground ? "#ffffff" : (displayHex ?? "#ffffff");
           context.fillRect(left, top, cellSize, cellSize);
 
           if (color && !isBackground) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bambuPlaBasicColors } from "../data/bambuPlaBasic";
-import { colorDistance, findNearestColor, hexToRgb, limitPaletteCells } from "./color";
+import { colorDistance, deltaE76, findNearestColor, hexToRgb, limitPaletteCells, rgbToLab } from "./color";
 
 const [white, black, red] = bambuPlaBasicColors;
 
@@ -9,12 +9,23 @@ describe("color helpers", () => {
     expect(hexToRgb("#0A0A0A")).toEqual({ r: 10, g: 10, b: 10 });
   });
 
-  it("uses squared distance between RGB values", () => {
-    expect(colorDistance({ r: 0, g: 0, b: 0 }, { r: 3, g: 4, b: 12 })).toBe(169);
+  it("uses CIELAB delta E between RGB values", () => {
+    const blackLab = rgbToLab({ r: 0, g: 0, b: 0 });
+    const whiteLab = rgbToLab({ r: 255, g: 255, b: 255 });
+
+    expect(blackLab.l).toBeCloseTo(0);
+    expect(whiteLab.l).toBeCloseTo(100);
+    expect(colorDistance({ r: 0, g: 0, b: 0 }, { r: 255, g: 255, b: 255 })).toBeCloseTo(deltaE76(blackLab, whiteLab));
   });
 
   it("finds the nearest color in a palette", () => {
     expect(findNearestColor({ r: 8, g: 8, b: 8 }, [white, black, red]).id).toBe(black.id);
+  });
+
+  it("uses perceptual distance for dark saturated colors", () => {
+    const blue = bambuPlaBasicColors.find((color) => color.id === "bambu-pla-basic-blue");
+    expect(blue).toBeDefined();
+    expect(findNearestColor({ r: 0, g: 0, b: 60 }, [black, blue!, red]).id).toBe(blue!.id);
   });
 
   it("limits cells to the most used palette colors", () => {

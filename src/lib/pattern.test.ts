@@ -79,4 +79,15 @@ describe("pattern helpers", () => {
     expect(validatePattern(createPattern())).not.toBeNull();
     expect(validatePattern({ ...createPattern(), cells: [white.id] })).toBeNull();
   });
+
+  it("rejects malformed palette, cell, and settings values", () => {
+    expect(validatePattern({ ...createPattern(), palette: [{ ...white, hex: "white" }] })).toBeNull();
+    expect(
+      validatePattern({ ...createPattern(), cells: [white.id, black.id, false, white.id, red.id, black.id] }),
+    ).toBeNull();
+    expect(validatePattern({ ...createPattern(), backgroundCells: [true] })).toBeNull();
+    expect(
+      validatePattern({ ...createPattern(), settings: { ...createPattern().settings, fitMode: "tile" } }),
+    ).toBeNull();
+  });
 });

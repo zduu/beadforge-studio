@@ -5,4 +5,5 @@ dist
 .wrangler
 *.tsbuildinfo
 node_modules/.tmp
-PROJECT_PLAN.md
+IMPROVEMENT_OPTIMIZATION_PLAN.md
+.claude

@@ -1,4 +1,5 @@
 import { modelFileToLayeredPattern, modelFileToPreviewData } from "../lib/modelToLayered";
+import type { ModelProcessingProgress } from "../lib/modelToLayered";
 import type { ModelWorkerRequest, ModelWorkerResponse } from "../lib/modelWorkerMessages";
 
 type WorkerScope = {
@@ -13,9 +14,22 @@ workerScope.addEventListener("message", (event) => {
 });
 
 async function handleRequest(request: ModelWorkerRequest) {
+  const reportProgress = (progress: ModelProcessingProgress) => {
+    workerScope.postMessage({
+      id: request.id,
+      ok: true,
+      type: "progress",
+      progress,
+    });
+  };
+
   try {
     if (request.type === "preview") {
-      const previewData = await modelFileToPreviewData(request.file, { colorId: request.colorId });
+      const previewData = await modelFileToPreviewData(
+        request.file,
+        { colorId: request.colorId },
+        { onProgress: reportProgress },
+      );
       workerScope.postMessage({
         id: request.id,
         ok: true,
@@ -25,7 +39,9 @@ async function handleRequest(request: ModelWorkerRequest) {
       return;
     }
 
-    const layeredPattern = await modelFileToLayeredPattern(request.file, request.settings);
+    const layeredPattern = await modelFileToLayeredPattern(request.file, request.settings, {
+      onProgress: reportProgress,
+    });
     workerScope.postMessage({
       id: request.id,
       ok: true,

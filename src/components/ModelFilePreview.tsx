@@ -83,7 +83,7 @@ export function ModelFilePreview({ orientation, previewData }: ModelFilePreviewP
       renderer.dispose();
       mount.replaceChildren();
     };
-  }, [orientation.rotateXDeg, orientation.rotateYDeg, orientation.rotateZDeg, previewData]);
+  }, [orientation, previewData]);
 
   return <div aria-label="原始模型预览" className="model-preview-canvas" ref={mountRef} />;
 }
@@ -95,12 +95,14 @@ function buildModelGroup(previewData: ModelPreviewData, orientation: ModelOrient
     (previewData.bounds.min[1] + previewData.bounds.max[1]) / 2,
     (previewData.bounds.min[2] + previewData.bounds.max[2]) / 2,
   );
-  const matrix = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(
-    THREE.MathUtils.degToRad(orientation.rotateXDeg),
-    THREE.MathUtils.degToRad(orientation.rotateYDeg),
-    THREE.MathUtils.degToRad(orientation.rotateZDeg),
-    "XYZ",
-  ));
+  const matrix = new THREE.Matrix4().makeRotationFromEuler(
+    new THREE.Euler(
+      THREE.MathUtils.degToRad(orientation.rotateXDeg),
+      THREE.MathUtils.degToRad(orientation.rotateYDeg),
+      THREE.MathUtils.degToRad(orientation.rotateZDeg),
+      "XYZ",
+    ),
+  );
   const positionsByColor = new Map<string, number[]>();
   const colorById = new Map(previewData.palette.map((color) => [color.id, color]));
 

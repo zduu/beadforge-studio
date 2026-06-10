@@ -1,4 +1,5 @@
 import type { LayeredPattern, ModelOrientation, ModelPreviewData, ModelSupportSettings } from "../types";
+import type { ModelProcessingProgress } from "./model";
 
 export type ModelWorkerSliceSettings = {
   width: number;
@@ -30,6 +31,12 @@ export type ModelWorkerJobRequest =
   | Omit<Extract<ModelWorkerRequest, { type: "slice" }>, "id">;
 
 export type ModelWorkerResponse =
+  | {
+      id: number;
+      ok: true;
+      type: "progress";
+      progress: ModelProcessingProgress;
+    }
   | {
       id: number;
       ok: true;

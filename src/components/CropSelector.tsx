@@ -1,4 +1,4 @@
-import { type PointerEvent, useEffect, useRef } from "react";
+import { type PointerEvent, useCallback, useEffect, useRef } from "react";
 import { isPatternBackgroundCell } from "../lib/pattern";
 import type { CropRect, Pattern } from "../types";
 
@@ -22,34 +22,13 @@ export function CropSelector({ mode, imageUrl, pattern, rect, onRectChange }: Cr
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const metricsRef = useRef<DrawMetrics>({ left: 0, top: 0, width: 1, height: 1 });
-  const dragRef = useRef<{ active: boolean; anchorX: number; anchorY: number }>({ active: false, anchorX: 0, anchorY: 0 });
+  const dragRef = useRef<{ active: boolean; anchorX: number; anchorY: number }>({
+    active: false,
+    anchorX: 0,
+    anchorY: 0,
+  });
 
-  useEffect(() => {
-    if (mode !== "image" || !imageUrl) {
-      imageRef.current = null;
-      drawSelector();
-      return;
-    }
-
-    const image = new Image();
-    image.onload = () => {
-      imageRef.current = image;
-      drawSelector();
-    };
-    image.src = imageUrl;
-  }, [imageUrl, mode]);
-
-  useEffect(() => {
-    drawSelector();
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-
-    const observer = new ResizeObserver(drawSelector);
-    observer.observe(wrapper);
-    return () => observer.disconnect();
-  }, [mode, pattern, rect]);
-
-  const drawSelector = () => {
+  const drawSelector = useCallback(() => {
     const canvas = canvasRef.current;
     const wrapper = wrapperRef.current;
     if (!canvas || !wrapper) return;
@@ -84,9 +63,19 @@ export function CropSelector({ mode, imageUrl, pattern, rect, onRectChange }: Cr
       const crop = rectToCanvas(rect, metrics);
       context.fillStyle = "rgba(15, 23, 42, 0.46)";
       context.fillRect(metrics.left, metrics.top, metrics.width, crop.top - metrics.top);
-      context.fillRect(metrics.left, crop.top + crop.height, metrics.width, metrics.top + metrics.height - crop.top - crop.height);
+      context.fillRect(
+        metrics.left,
+        crop.top + crop.height,
+        metrics.width,
+        metrics.top + metrics.height - crop.top - crop.height,
+      );
       context.fillRect(metrics.left, crop.top, crop.left - metrics.left, crop.height);
-      context.fillRect(crop.left + crop.width, crop.top, metrics.left + metrics.width - crop.left - crop.width, crop.height);
+      context.fillRect(
+        crop.left + crop.width,
+        crop.top,
+        metrics.left + metrics.width - crop.left - crop.width,
+        crop.height,
+      );
       context.strokeStyle = "#ffffff";
       context.lineWidth = 3;
       context.strokeRect(crop.left, crop.top, crop.width, crop.height);
@@ -94,7 +83,32 @@ export function CropSelector({ mode, imageUrl, pattern, rect, onRectChange }: Cr
       context.lineWidth = 2;
       context.strokeRect(crop.left + 1, crop.top + 1, Math.max(0, crop.width - 2), Math.max(0, crop.height - 2));
     }
-  };
+  }, [mode, pattern, rect]);
+
+  useEffect(() => {
+    if (mode !== "image" || !imageUrl) {
+      imageRef.current = null;
+      drawSelector();
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      imageRef.current = image;
+      drawSelector();
+    };
+    image.src = imageUrl;
+  }, [drawSelector, imageUrl, mode]);
+
+  useEffect(() => {
+    drawSelector();
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    const observer = new ResizeObserver(drawSelector);
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [drawSelector]);
 
   const handlePointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
     if (!hasDrawable(mode, imageRef.current, pattern) || event.button !== 0) return;

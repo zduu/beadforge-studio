@@ -58,8 +58,8 @@ function createLayeredPattern(): LayeredPattern {
       nonEmptyLayerCount: 2,
       emptyLayerCount: 0,
       occupiedCellsByLayer: [
-      { index: 0, occupiedCells: 2 },
-      { index: 1, occupiedCells: 3 },
+        { index: 0, occupiedCells: 2 },
+        { index: 1, occupiedCells: 3 },
       ],
     },
     support: {
@@ -122,9 +122,11 @@ describe("layered pattern helpers", () => {
 
   it("rejects malformed layered projects", () => {
     expect(validateLayeredPattern({ ...createLayeredPattern(), layers: [] })).toBeNull();
-    expect(validateLayeredPattern({
-      ...createLayeredPattern(),
-      layers: [{ index: 0, name: "Layer 1", cells: [white.id] }],
-    })).toBeNull();
+    expect(
+      validateLayeredPattern({
+        ...createLayeredPattern(),
+        layers: [{ index: 0, name: "Layer 1", cells: [white.id] }],
+      }),
+    ).toBeNull();
   });
 });

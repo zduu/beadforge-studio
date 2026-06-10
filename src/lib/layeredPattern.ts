@@ -1,13 +1,27 @@
-import type { BeadColor, LayeredPattern, ModelBoundsSummary, ModelLayerOccupancy, ModelOrientation, ModelSliceDiagnostics, ModelSupportSummary, Pattern } from "../types";
+import type {
+  LayeredPattern,
+  ModelBoundsSummary,
+  ModelLayerOccupancy,
+  ModelOrientation,
+  ModelSliceDiagnostics,
+  ModelSupportSummary,
+  Pattern,
+} from "../types";
+import { isBeadColor, isBoolean, isCellValue, isPositiveInteger } from "./projectSchema";
 
 type LayeredPatternToPatternOptions = {
   includeSupports?: boolean;
 };
 
-export function layeredPatternToPattern(layeredPattern: LayeredPattern, layerIndex: number, options: LayeredPatternToPatternOptions = {}): Pattern {
+export function layeredPatternToPattern(
+  layeredPattern: LayeredPattern,
+  layerIndex: number,
+  options: LayeredPatternToPatternOptions = {},
+): Pattern {
   const layer = layeredPattern.layers[layerIndex] ?? layeredPattern.layers[0];
   const includeSupports = options.includeSupports ?? true;
-  const supportCells = layer?.supportCells?.length === layeredPattern.width * layeredPattern.height ? layer.supportCells : undefined;
+  const supportCells =
+    layer?.supportCells?.length === layeredPattern.width * layeredPattern.height ? layer.supportCells : undefined;
 
   return {
     version: 1,
@@ -15,7 +29,12 @@ export function layeredPatternToPattern(layeredPattern: LayeredPattern, layerInd
     width: layeredPattern.width,
     height: layeredPattern.height,
     palette: layeredPattern.palette,
-    cells: getVisibleLayerCells(layer?.cells, supportCells, layeredPattern.width * layeredPattern.height, includeSupports),
+    cells: getVisibleLayerCells(
+      layer?.cells,
+      supportCells,
+      layeredPattern.width * layeredPattern.height,
+      includeSupports,
+    ),
     supportCells: includeSupports && supportCells ? [...supportCells] : undefined,
     settings: {
       width: layeredPattern.width,
@@ -67,13 +86,21 @@ export function validateLayeredPattern(value: unknown): LayeredPattern | null {
   const cellCount = candidate.width * candidate.height;
   const layers = candidate.layers.map((layer) => {
     if (!layer || typeof layer !== "object") return null;
-    if (!Number.isInteger(layer.index) || layer.index < 0 || typeof layer.name !== "string" || !Array.isArray(layer.cells)) {
+    if (
+      !Number.isInteger(layer.index) ||
+      layer.index < 0 ||
+      typeof layer.name !== "string" ||
+      !Array.isArray(layer.cells)
+    ) {
       return null;
     }
     if (layer.cells.length !== cellCount || !layer.cells.every(isCellValue)) return null;
-    const supportCells = Array.isArray(layer.supportCells) && layer.supportCells.length === cellCount && layer.supportCells.every(isBoolean)
-      ? [...layer.supportCells]
-      : undefined;
+    const supportCells =
+      Array.isArray(layer.supportCells) &&
+      layer.supportCells.length === cellCount &&
+      layer.supportCells.every(isBoolean)
+        ? [...layer.supportCells]
+        : undefined;
     return {
       index: layer.index,
       name: layer.name,
@@ -103,7 +130,10 @@ function normalizeSourceModel(sourceModel: LayeredPattern["sourceModel"]): Layer
   if (!sourceModel || typeof sourceModel !== "object") return undefined;
 
   const fileName = typeof sourceModel.fileName === "string" ? sourceModel.fileName : "model";
-  const fileType = sourceModel.fileType === "stl" || sourceModel.fileType === "3mf" || sourceModel.fileType === "obj" ? sourceModel.fileType : "3mf";
+  const fileType =
+    sourceModel.fileType === "stl" || sourceModel.fileType === "3mf" || sourceModel.fileType === "obj"
+      ? sourceModel.fileType
+      : "3mf";
   const beadPitchMm = getFiniteNumber(sourceModel.beadPitchMm, 2.6);
   const beadHeightMm = getFiniteNumber(sourceModel.beadHeightMm, getFiniteNumber(sourceModel.layerHeightMm, 3));
 
@@ -126,7 +156,9 @@ function normalizeSliceDiagnostics(diagnostics: LayeredPattern["diagnostics"]): 
   const orientedBounds = normalizeBoundsSummary(diagnostics.orientedBounds);
   const scaledSizeMm = normalizeVector3(diagnostics.scaledSizeMm);
   const occupiedCellsByLayer = Array.isArray(diagnostics.occupiedCellsByLayer)
-    ? diagnostics.occupiedCellsByLayer.map(normalizeLayerOccupancy).filter((item): item is ModelLayerOccupancy => Boolean(item))
+    ? diagnostics.occupiedCellsByLayer
+        .map(normalizeLayerOccupancy)
+        .filter((item): item is ModelLayerOccupancy => Boolean(item))
     : [];
 
   if (!originalBounds || !orientedBounds || !scaledSizeMm) return undefined;
@@ -193,33 +225,6 @@ function normalizeVector3(value: unknown): [number, number, number] | null {
   const [x, y, z] = value;
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
   return [x, y, z];
-}
-
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
-}
-
-function isCellValue(value: unknown): value is string | null {
-  return typeof value === "string" || value === null;
-}
-
-function isBoolean(value: unknown): value is boolean {
-  return typeof value === "boolean";
-}
-
-function isBeadColor(value: unknown): value is BeadColor {
-  if (!value || typeof value !== "object") return false;
-  const color = value as Partial<BeadColor>;
-  return (
-    typeof color.id === "string" &&
-    color.brand === "Bambu Lab" &&
-    (color.filamentType === "PLA Basic" || color.filamentType === "3MF Filament") &&
-    typeof color.code === "string" &&
-    typeof color.name === "string" &&
-    typeof color.nameZh === "string" &&
-    typeof color.hex === "string" &&
-    /^#[0-9a-f]{6}$/i.test(color.hex)
-  );
 }
 
 function getFiniteNumber(value: unknown, fallback: number): number {

@@ -13,11 +13,9 @@ export async function imageFileToPattern(file: File, settings: PatternSettings):
   const bitmap = await createImageBitmap(file);
   const sourceWidth = bitmap.width;
   const sourceHeight = bitmap.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = settings.width * SAMPLE_SCALE;
-  canvas.height = settings.height * SAMPLE_SCALE;
+  const canvas = createProcessingCanvas(settings.width * SAMPLE_SCALE, settings.height * SAMPLE_SCALE);
 
-  const context = canvas.getContext("2d");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) {
     throw new Error("无法创建 Canvas 上下文");
   }
@@ -68,16 +66,14 @@ export async function imageFileToPattern(file: File, settings: PatternSettings):
 
   for (let y = 0; y < settings.height; y += 1) {
     for (let x = 0; x < settings.width; x += 1) {
-      const rgb = settings.sampleMode === "center"
-        ? sampleCenter(imageData, x, y)
-        : sampleAverage(imageData, x, y);
+      const rgb = settings.sampleMode === "center" ? sampleCenter(imageData, x, y) : sampleAverage(imageData, x, y);
 
       rgbs.push(rgb);
     }
   }
 
   const enhancedRgbs = enhanceGridColors(rgbs, settings.width, settings.height, settings.detailBoost);
-  const cells = enhancedRgbs.map((rgb) => rgb ? findNearestColor(rgb, bambuPlaBasicColors).id : null);
+  const cells = enhancedRgbs.map((rgb) => (rgb ? findNearestColor(rgb, bambuPlaBasicColors).id : null));
 
   return {
     version: 1,
@@ -93,6 +89,21 @@ export async function imageFileToPattern(file: File, settings: PatternSettings):
       height: sourceHeight,
     },
   };
+}
+
+function createProcessingCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas {
+  if (typeof OffscreenCanvas !== "undefined") {
+    return new OffscreenCanvas(width, height);
+  }
+
+  if (typeof document !== "undefined") {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  }
+
+  throw new Error("当前浏览器不支持本机图片处理 Worker，请升级浏览器后重试");
 }
 
 function normalizeCrop(crop: CropRect | null): CropRect {
@@ -111,7 +122,12 @@ function clampUnit(value: number): number {
   return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 }
 
-function enhanceGridColors(rgbs: Array<Rgb | null>, width: number, height: number, detailBoost: number): Array<Rgb | null> {
+function enhanceGridColors(
+  rgbs: Array<Rgb | null>,
+  width: number,
+  height: number,
+  detailBoost: number,
+): Array<Rgb | null> {
   if (detailBoost <= 0) return rgbs;
 
   const amount = Math.min(100, Math.max(0, detailBoost)) / 100;
@@ -126,11 +142,15 @@ function enhanceGridColors(rgbs: Array<Rgb | null>, width: number, height: numbe
     const y = Math.floor(index / width);
     const blurred = getNeighborAverage(rgbs, width, height, x, y) ?? rgb;
 
-    return adjustRgb({
-      r: rgb.r + (rgb.r - blurred.r) * sharpen,
-      g: rgb.g + (rgb.g - blurred.g) * sharpen,
-      b: rgb.b + (rgb.b - blurred.b) * sharpen,
-    }, contrast, saturation);
+    return adjustRgb(
+      {
+        r: rgb.r + (rgb.r - blurred.r) * sharpen,
+        g: rgb.g + (rgb.g - blurred.g) * sharpen,
+        b: rgb.b + (rgb.b - blurred.b) * sharpen,
+      },
+      contrast,
+      saturation,
+    );
   });
 }
 
@@ -174,7 +194,13 @@ function clampColor(value: number): number {
   return Math.round(Math.min(255, Math.max(0, value)));
 }
 
-function getDrawRect(sourceWidth: number, sourceHeight: number, targetWidth: number, targetHeight: number, fitMode: PatternSettings["fitMode"]) {
+function getDrawRect(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+  fitMode: PatternSettings["fitMode"],
+) {
   if (fitMode === "stretch") {
     return { x: 0, y: 0, width: targetWidth, height: targetHeight };
   }
